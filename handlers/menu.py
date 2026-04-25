@@ -1,8 +1,8 @@
 """
-Обработчики главного меню и навигации
+Обробники головного меню та навігації
 """
 from aiogram import Router, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
@@ -14,168 +14,206 @@ from sqlalchemy import select
 router = Router()
 
 WELCOME_TEXT = """
-🌟 <b>Привет! Добро пожаловать в Magic Vibes!</b>
+✨ <b>Ласкаво просимо до Magic Vibes!</b> ✨
 
-Я помогу вам:
-✨ Записаться на актуальные практики
-🧘‍♀️ Забронировать индивидуальную сессию
-📚 Выбрать и оплатить курс обучения
-🛠 Получить доступ к полезным материалам
-💬 Связаться с менеджером
+🪷 Тут ви можете:
 
-Выберите нужный раздел:
+🌟  Записатися на актуальні практики
+🧘‍♀️  Забронювати індивідуальну сесію
+📚  Обрати та сплатити курс навчання
+🎧  Отримати доступ до медитацій та матеріалів
+💬  Звʼязатися з менеджером
+
+━━━━━━━━━━━━━━━━━
+👇 Оберіть потрібний розділ:
 """
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, session: AsyncSession):
-    """Обработка команды /start"""
-    
-    # Проверяем, есть ли пользователь в БД
+HELP_TEXT = """
+ℹ️ <b>Допомога</b>
+
+Цей бот допоможе вам записатися на практики Magic Vibes 💫
+
+<b>Команди:</b>
+/start — почати спочатку
+/menu — головне меню
+/help — ця підказка
+
+Якщо щось не працює — натисніть «💬 Звʼязатися з менеджером» в меню, ми завжди раді допомогти 🤍
+"""
+
+
+async def _greet(message: Message, session: AsyncSession):
+    """Показати головне меню (для /start та /menu)."""
+    # Реєструємо користувача якщо ще немає
     result = await session.execute(
         select(User).where(User.telegram_id == message.from_user.id)
     )
     user = result.scalar_one_or_none()
-    
-    # Если пользователя нет - создаем
+
     if not user:
         user = User(
             telegram_id=message.from_user.id,
             username=message.from_user.username,
-            full_name=message.from_user.full_name
+            full_name=message.from_user.full_name or "",
         )
         session.add(user)
         await session.commit()
-    
+
     await message.answer(
         text=WELCOME_TEXT,
         reply_markup=get_main_menu(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, session: AsyncSession):
+    """Команда /start"""
+    await _greet(message, session)
+
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message, session: AsyncSession):
+    """Команда /menu — те саме головне меню"""
+    await _greet(message, session)
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    """Команда /help"""
+    await message.answer(
+        text=HELP_TEXT,
+        reply_markup=get_back_to_main_menu(),
+        parse_mode="HTML",
+    )
+
 
 @router.callback_query(F.data == "main_menu")
 async def show_main_menu(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню"""
-    
-    # Очищаем состояние
+    """Повернення до головного меню"""
     await state.clear()
-    
+
     await callback.message.edit_text(
         text=WELCOME_TEXT,
         reply_markup=get_main_menu(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()
+
 
 @router.callback_query(F.data == "tools")
 async def show_tools(callback: CallbackQuery):
-    """Показ раздела Инструменты"""
+    """Розділ Інструменти"""
     from keyboards.inline import get_tools_keyboard
-    
+
     text = """
-🛠 <b>Инструменты для практики</b>
+🎧 <b>Інструменти та матеріали</b>
 
-Здесь вы найдете:
-📖 Гайдовые медитации
-🎵 Аудио-практики для самостоятельной работы
-📝 Полезные статьи и материалы
+Тут ви знайдете:
 
-Выберите категорию:
+📖  Гайдові медитації
+🎵  Аудіо-практики для самостійної роботи
+📝  Корисні статті та матеріали
+
+━━━━━━━━━━━━━━━━━
+👇 Оберіть категорію:
 """
-    
+
     await callback.message.edit_text(
         text=text,
         reply_markup=get_tools_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()
 
+
 @router.callback_query(F.data == "contact_manager")
 async def contact_manager(callback: CallbackQuery, session: AsyncSession):
-    """Связь с менеджером"""
+    """Звʼязок з менеджером"""
     from keyboards.inline import get_manager_contact_keyboard
     from database.models import ManagerContact
-    
-    # Получаем активных менеджеров
+
     result = await session.execute(
         select(ManagerContact).where(ManagerContact.is_active == True)
     )
     managers = result.scalars().all()
-    
+
     if managers:
         text = """
-💬 <b>Связаться с менеджером</b>
+💬 <b>Звʼязатися з менеджером</b>
 
-Наши менеджеры с радостью ответят на все ваши вопросы!
+Наші менеджери з радістю дадуть відповідь на всі ваші питання 🤍
 
-Выберите удобный способ связи:
+━━━━━━━━━━━━━━━━━
+👇 Оберіть зручний спосіб звʼязку:
 """
         await callback.message.edit_text(
             text=text,
             reply_markup=get_manager_contact_keyboard(managers),
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
     else:
         text = """
-💬 <b>Связаться с менеджером</b>
+💬 <b>Звʼязатися з менеджером</b>
 
-К сожалению, в данный момент менеджеры недоступны.
-Попробуйте связаться позже или напишите нам напрямую: @magic_vibes_support
+На жаль, зараз менеджери недоступні.
+Спробуйте пізніше або напишіть нам напряму: @magic_vibes_support
 """
         await callback.message.edit_text(
             text=text,
             reply_markup=get_back_to_main_menu(),
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
-    
+
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("tools_"))
 async def show_tool_category(callback: CallbackQuery):
-    """Показ категорий инструментов"""
-    
+    """Категорії інструментів"""
     category = callback.data.replace("tools_", "")
-    
+
     texts = {
         "meditations": """
-📖 <b>Медитации</b>
+📖 <b>Медитації</b>
 
-Здесь будут доступны гайдовые медитации для разных целей:
-• Расслабление и снятие стресса
-• Работа с эмоциями
-• Утренние и вечерние практики
-• Медитации для сна
+Тут будуть доступні гайдові медитації для різних цілей:
+• Розслаблення та зняття стресу
+• Робота з емоціями
+• Ранкові та вечірні практики
+• Медитації для сну
 
-<i>Раздел находится в разработке.</i>
+<i>Розділ у розробці.</i>
 """,
         "audio": """
-🎵 <b>Аудио-практики</b>
+🎵 <b>Аудіо-практики</b>
 
-Коллекция аудио для самостоятельной практики:
-• Дыхательные упражнения
-• Мантры и аффирмации
-• Звуковые ванны
-• Музыка для йоги
+Колекція аудіо для самостійної практики:
+• Дихальні вправи
+• Мантри та афірмації
+• Звукові ванни
+• Музика для йоги
 
-<i>Раздел находится в разработке.</i>
+<i>Розділ у розробці.</i>
 """,
         "articles": """
-📝 <b>Статьи и материалы</b>
+📝 <b>Статті та матеріали</b>
 
-Полезные статьи по темам:
-• Основы йоги и медитации
-• Здоровый образ жизни
-• Работа с энергией
-• Советы от экспертов
+Корисні статті за темами:
+• Основи йоги та медитації
+• Здоровий спосіб життя
+• Робота з енергією
+• Поради від експертів
 
-<i>Раздел находится в разработке.</i>
-"""
+<i>Розділ у розробці.</i>
+""",
     }
-    
-    text = texts.get(category, "Раздел в разработке")
-    
+
+    text = texts.get(category, "Розділ у розробці")
+
     await callback.message.edit_text(
         text=text,
         reply_markup=get_back_to_main_menu(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()

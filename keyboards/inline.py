@@ -1,215 +1,222 @@
 """
-Клавиатуры для бота Magic Vibes
+Клавіатури для бота Magic Vibes
 """
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+
 def get_main_menu() -> InlineKeyboardMarkup:
-    """Главное меню бота"""
+    """Головне меню бота"""
     builder = InlineKeyboardBuilder()
-    
+
     builder.row(InlineKeyboardButton(
-        text="📅 Актуальные практики",
+        text="🪷  Актуальні практики",
         callback_data="practices_list"
     ))
     builder.row(InlineKeyboardButton(
-        text="🧘‍♀️ Индивидуальная сессия",
+        text="🧘‍♀️  Індивідуальна сесія",
         callback_data="individual_session"
     ))
     builder.row(InlineKeyboardButton(
-        text="🎓 Стартовый онлайн-курс",
+        text="🌟  Стартовий онлайн-курс",
         callback_data="starter_course"
     ))
     builder.row(InlineKeyboardButton(
-        text="📚 Обучение 3 месяца",
+        text="📚  Навчання 3 місяці",
         callback_data="three_month_course"
     ))
     builder.row(InlineKeyboardButton(
-        text="🛠 Инструменты",
+        text="🎧  Інструменти та матеріали",
         callback_data="tools"
     ))
     builder.row(InlineKeyboardButton(
-        text="💬 Связаться с менеджером",
+        text="💬  Зв'язатися з менеджером",
         callback_data="contact_manager"
     ))
-    
+
     return builder.as_markup()
+
 
 def get_back_to_main_menu() -> InlineKeyboardMarkup:
-    """Кнопка возврата в главное меню"""
+    """Кнопка повернення до головного меню"""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text="◀️ Вернуться в главное меню",
+        text="◀️  До головного меню",
         callback_data="main_menu"
     ))
     return builder.as_markup()
+
 
 def get_practices_keyboard(practices: list) -> InlineKeyboardMarkup:
-    """Клавиатура со списком актуальных практик"""
+    """Список актуальних практик"""
     builder = InlineKeyboardBuilder()
-    
+
     for practice in practices:
         builder.row(InlineKeyboardButton(
-            text=f"{practice.title} - {practice.price} грн",
+            text=f"✨  {practice.title}  •  {int(practice.price)} грн",
             callback_data=f"practice_{practice.id}"
         ))
-    
+
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад",
+        text="◀️  Назад",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()
+
 
 def get_practice_schedule_keyboard(schedules: list, practice_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура с расписанием практики"""
+    """Розклад практики"""
     builder = InlineKeyboardBuilder()
-    
+
     for schedule in schedules:
-        date_str = schedule.datetime.strftime("%d.%m в %H:%M")
-        available_text = f"(Осталось мест: {schedule.available_slots})" if schedule.available_slots else ""
-        
+        date_str = schedule.datetime.strftime("%d.%m  •  %H:%M")
+        slots_text = f"  ({schedule.available_slots} місць)" if schedule.available_slots else ""
+
         builder.row(InlineKeyboardButton(
-            text=f"{date_str} {available_text}",
+            text=f"📅  {date_str}{slots_text}",
             callback_data=f"book_{schedule.id}"
         ))
-    
+
     builder.row(InlineKeyboardButton(
-        text="◀️ К списку практик",
+        text="◀️  До списку практик",
         callback_data="practices_list"
     ))
-    
+
     return builder.as_markup()
+
 
 def get_booking_confirmation_keyboard(booking_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения бронирования"""
+    """Підтвердження бронювання"""
     builder = InlineKeyboardBuilder()
-    
-    builder.row(
-        InlineKeyboardButton(
-            text="✅ Подтвердить и оплатить",
-            callback_data=f"confirm_booking_{booking_id}"
-        )
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text="❌ Отменить",
-            callback_data=f"cancel_booking_{booking_id}"
-        )
-    )
-    
+
+    builder.row(InlineKeyboardButton(
+        text="✅  Підтвердити та сплатити",
+        callback_data=f"confirm_booking_{booking_id}"
+    ))
+    builder.row(InlineKeyboardButton(
+        text="❌  Скасувати",
+        callback_data=f"cancel_booking_{booking_id}"
+    ))
+
     return builder.as_markup()
 
+
 def get_payment_keyboard(payment_url: str, payment_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для оплаты"""
+    """Клавіатура оплати"""
     builder = InlineKeyboardBuilder()
-    
+
     builder.row(InlineKeyboardButton(
-        text="💳 Оплатить",
+        text="💳  Перейти до оплати",
         url=payment_url
     ))
     builder.row(InlineKeyboardButton(
-        text="✅ Я оплатил(а)",
+        text="✅  Я сплатив(ла)",
         callback_data=f"check_payment_{payment_id}"
     ))
     builder.row(InlineKeyboardButton(
-        text="◀️ Вернуться в меню",
+        text="◀️  До меню",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()
 
+
 def get_individual_session_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для индивидуальной сессии"""
+    """Клавіатура індивідуальної сесії"""
     builder = InlineKeyboardBuilder()
-    
+
     builder.row(InlineKeyboardButton(
-        text="📅 Выбрать дату и время",
+        text="📅  Обрати дату й час",
         callback_data="individual_choose_datetime"
     ))
     builder.row(InlineKeyboardButton(
-        text="💬 Написать менеджеру",
+        text="💬  Написати менеджеру",
         callback_data="contact_manager"
     ))
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад",
+        text="◀️  Назад",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()
+
 
 def get_courses_keyboard(courses: list) -> InlineKeyboardMarkup:
-    """Клавиатура со списком курсов"""
+    """Список курсів"""
     builder = InlineKeyboardBuilder()
-    
+
     for course in courses:
         builder.row(InlineKeyboardButton(
-            text=f"{course.title} - {course.price} грн",
+            text=f"🎓  {course.title}  •  {int(course.price)} грн",
             callback_data=f"course_{course.id}"
         ))
-    
+
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад",
+        text="◀️  Назад",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()
 
+
 def get_course_enrollment_keyboard(course_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для записи на курс"""
+    """Запис на курс"""
     builder = InlineKeyboardBuilder()
-    
+
     builder.row(InlineKeyboardButton(
-        text="✅ Записаться на курс",
+        text="✅  Записатися на курс",
         callback_data=f"enroll_course_{course_id}"
     ))
     builder.row(InlineKeyboardButton(
-        text="ℹ️ Подробнее",
+        text="ℹ️  Детальніше",
         callback_data=f"course_details_{course_id}"
     ))
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад к курсам",
+        text="◀️  До головного меню",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()
 
+
 def get_tools_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура раздела Инструменты"""
+    """Клавіатура розділу Інструменти"""
     builder = InlineKeyboardBuilder()
-    
+
     builder.row(InlineKeyboardButton(
-        text="📖 Медитации",
+        text="📖  Медитації",
         callback_data="tools_meditations"
     ))
     builder.row(InlineKeyboardButton(
-        text="🎵 Аудио-практики",
+        text="🎵  Аудіо-практики",
         callback_data="tools_audio"
     ))
     builder.row(InlineKeyboardButton(
-        text="📝 Статьи и материалы",
+        text="📝  Статті та матеріали",
         callback_data="tools_articles"
     ))
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад",
+        text="◀️  Назад",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()
 
+
 def get_manager_contact_keyboard(managers: list) -> InlineKeyboardMarkup:
-    """Клавиатура с контактами менеджеров"""
+    """Контакти менеджерів"""
     builder = InlineKeyboardBuilder()
-    
+
     for manager in managers:
         builder.row(InlineKeyboardButton(
-            text=f"💬 {manager.name}",
+            text=f"💬  Написати — {manager.name}",
             url=f"https://t.me/{manager.telegram_username}"
         ))
-    
+
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад",
+        text="◀️  Назад",
         callback_data="main_menu"
     ))
-    
+
     return builder.as_markup()

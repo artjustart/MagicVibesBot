@@ -6,6 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand, BotCommandScopeDefault, MenuButtonCommands
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from config.settings import load_config
@@ -26,6 +27,18 @@ logger = logging.getLogger(__name__)
 async def on_startup(bot: Bot, config):
     """Действия при запуске бота"""
     logger.info("Bot starting...")
+
+    # Меню-команди (відображаються при натисканні кнопки "Меню" біля поля вводу)
+    await bot.set_my_commands(
+        commands=[
+            BotCommand(command="start", description="🚀 Запустити бота"),
+            BotCommand(command="menu", description="🪷 Головне меню"),
+            BotCommand(command="help", description="ℹ️ Допомога"),
+        ],
+        scope=BotCommandScopeDefault(),
+    )
+    # Кнопка "Menu" біля поля вводу повідомлень
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
 async def on_shutdown(bot: Bot, config):
