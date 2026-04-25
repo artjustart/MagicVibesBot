@@ -29,9 +29,17 @@ class BookingStates(StatesGroup):
     waiting_for_notes = State()
 
 
+def _practice_teaser(description: str) -> str:
+    """Перший абзац опису — як короткий тизер."""
+    if not description:
+        return ""
+    parts = [p.strip() for p in description.strip().split("\n\n") if p.strip()]
+    return parts[0] if parts else description[:300]
+
+
 @router.callback_query(F.data == "practices_list")
 async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
-    """Список актуальних групових практик"""
+    """Список актуальних групових практик — у вигляді виразних карток."""
     result = await session.execute(
         select(Practice).where(
             Practice.is_active == True,
@@ -40,18 +48,7 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
     )
     practices = result.scalars().all()
 
-    if practices:
-        text = """
-🪷 <b>Актуальні практики</b>
-
-Оберіть практику, щоб переглянути опис, розклад і записатися:
-"""
-        await callback.message.edit_text(
-            text=text,
-            reply_markup=get_practices_keyboard(practices),
-            parse_mode="HTML",
-        )
-    else:
+    if not practices:
         text = """
 🪷 <b>Актуальні практики</b>
 
@@ -63,6 +60,85 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
             reply_markup=get_back_to_main_menu(),
             parse_mode="HTML",
         )
+        await callback.answer()
+        return
+
+    # Видаляємо поточне меню — далі надсилаємо красиві картки
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    bot = callback.bot
+    chat_id = callback.from_user.id
+
+    # Шапка
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "✨━━━━━━━━━━━━━━━━━━━━✨\n"
+            "        🪷  <b>АКТУАЛЬНІ ПРАКТИКИ</b>  🪷\n"
+            "✨━━━━━━━━━━━━━━━━━━━━✨"
+        ),
+        parse_mode="HTML",
+    )
+
+    # Картка для кожної практики
+    for practice in practices:
+        # Найближче доступне заняття
+        sched_result = await session.execute(
+            select(PracticeSchedule).where(
+                PracticeSchedule.practice_id == practice.id,
+                PracticeSchedule.is_available == True,
+                PracticeSchedule.datetime >= datetime.utcnow(),
+                PracticeSchedule.available_slots > 0,
+            ).order_by(PracticeSchedule.datetime).limit(1)
+        )
+        next_schedule = sched_result.scalar_one_or_none()
+
+        if next_schedule:
+            next_date_line = (
+                f"📅  <b>Найближче заняття:</b>  "
+                f"{next_schedule.datetime.strftime('%d.%m.%Y о %H:%M')}\n"
+                f"👥  <b>Вільних місць:</b>  {next_schedule.available_slots} з {practice.max_participants}\n"
+            )
+        else:
+            next_date_line = "📅  <i>Найближчі дати уточнюйте у менеджера</i>\n"
+
+        teaser = _practice_teaser(practice.description)
+
+        card_text = (
+            f"🌟  <b>{practice.title}</b>\n\n"
+            f"{teaser}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{next_date_line}"
+            f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
+            f"💰  <b>Вартість:</b>  <b>{int(practice.price)} грн</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
+
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(
+            text="🪷   ЗАПИСАТИСЯ НА ПРАКТИКУ   🪷",
+            callback_data=f"practice_{practice.id}",
+        ))
+
+        await bot.send_message(
+            chat_id=chat_id,
+            text=card_text,
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
+
+    # Кнопка повернення в меню — окремим повідомленням знизу
+    await bot.send_message(
+        chat_id=chat_id,
+        text="━━━━━━━━━━━━━━━━━━━━",
+        reply_markup=get_back_to_main_menu(),
+    )
 
     await callback.answer()
 
