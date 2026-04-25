@@ -26,31 +26,11 @@ logger = logging.getLogger(__name__)
 async def on_startup(bot: Bot, config):
     """Действия при запуске бота"""
     logger.info("Bot starting...")
-    
-    # Уведомляем админов о запуске
-    for admin_id in config.tg_bot.admin_ids:
-        try:
-            await bot.send_message(
-                admin_id,
-                "🤖 Бот Magic Vibes запущен и готов к работе!"
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify admin {admin_id}: {e}")
 
 
 async def on_shutdown(bot: Bot, config):
     """Действия при остановке бота"""
     logger.info("Bot shutting down...")
-    
-    # Уведомляем админов об остановке
-    for admin_id in config.tg_bot.admin_ids:
-        try:
-            await bot.send_message(
-                admin_id,
-                "🤖 Бот Magic Vibes остановлен."
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify admin {admin_id}: {e}")
 
 
 async def main():
