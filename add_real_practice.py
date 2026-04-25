@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 
 from config.settings import load_config
 from database.models import (
-    Practice, PracticeType, PracticeSchedule, Booking
+    Practice, PracticeType, PracticeSchedule, Booking, Payment
 )
 
 
@@ -56,7 +56,17 @@ async def main():
         if old_practice_ids:
             print(f"Удаляем {len(old_practice_ids)} тестовых практик и связанные данные...")
 
-            # Удаляем bookings → schedules → practices в правильном порядке
+            # Находим bookings, которые надо удалить
+            old_bookings_result = await session.execute(
+                select(Booking.id).where(Booking.practice_id.in_(old_practice_ids))
+            )
+            old_booking_ids = [row[0] for row in old_bookings_result.all()]
+
+            # Удаляем payments → bookings → schedules → practices в правильном порядке
+            if old_booking_ids:
+                await session.execute(
+                    delete(Payment).where(Payment.booking_id.in_(old_booking_ids))
+                )
             await session.execute(
                 delete(Booking).where(Booking.practice_id.in_(old_practice_ids))
             )
