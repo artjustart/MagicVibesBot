@@ -49,6 +49,14 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Media (uploaded by user, not part of code)
+*.gif
+*.mp4
+*.mov
+*.png
+*.jpg
+*.jpeg
+
 # Pytest
 .pytest_cache/
 .coverage
