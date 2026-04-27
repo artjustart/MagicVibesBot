@@ -71,7 +71,7 @@ def get_practice_schedule_keyboard(schedules: list, practice_id: int) -> InlineK
 
     for schedule in schedules:
         date_str = schedule.datetime.strftime("%d.%m  •  %H:%M")
-        slots_text = f"  ({schedule.available_slots} місць)" if schedule.available_slots else ""
+        slots_text = f"  •  залишилось {schedule.available_slots}" if schedule.available_slots else ""
 
         builder.row(InlineKeyboardButton(
             text=f"📅  {date_str}{slots_text}",

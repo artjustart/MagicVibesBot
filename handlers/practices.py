@@ -86,25 +86,25 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
 
     # Картка для кожної практики
     for practice in practices:
-        # Найближче доступне заняття
+        # Найближчі 3 заняття
         sched_result = await session.execute(
             select(PracticeSchedule).where(
                 PracticeSchedule.practice_id == practice.id,
                 PracticeSchedule.is_available == True,
                 PracticeSchedule.datetime >= datetime.utcnow(),
                 PracticeSchedule.available_slots > 0,
-            ).order_by(PracticeSchedule.datetime).limit(1)
+            ).order_by(PracticeSchedule.datetime).limit(3)
         )
-        next_schedule = sched_result.scalar_one_or_none()
+        upcoming = sched_result.scalars().all()
 
-        if next_schedule:
-            next_date_line = (
-                f"📅  <b>Найближче заняття:</b>  "
-                f"{next_schedule.datetime.strftime('%d.%m.%Y о %H:%M')}\n"
-                f"👥  <b>Вільних місць:</b>  {next_schedule.available_slots} з {practice.max_participants}\n"
+        if upcoming:
+            dates_lines = "\n".join(
+                f"   • <b>{s.datetime.strftime('%d.%m.%Y о %H:%M')}</b>  —  залишилось <b>{s.available_slots}</b> місць"
+                for s in upcoming
             )
+            schedule_block = f"📅  <b>Найближчі дати:</b>\n{dates_lines}\n"
         else:
-            next_date_line = "📅  <i>Найближчі дати уточнюйте у менеджера</i>\n"
+            schedule_block = "📅  <i>Найближчі дати уточнюйте у менеджера</i>\n"
 
         teaser = _practice_teaser(practice.description)
 
@@ -112,7 +112,7 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
             f"🌟  <b>{practice.title}</b>\n\n"
             f"{teaser}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{next_date_line}"
+            f"{schedule_block}"
             f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
             f"💰  <b>Вартість:</b>  <b>{int(practice.price)} грн</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━"
@@ -171,7 +171,6 @@ async def show_practice_schedule(callback: CallbackQuery, session: AsyncSession)
 ━━━━━━━━━━━━━━━━━
 ⏱  <b>Тривалість:</b> {practice.duration_minutes} хв
 💰  <b>Вартість:</b> {int(practice.price)} грн
-👥  <b>Максимум учасників:</b> {practice.max_participants}
 
 📅 <b>Оберіть зручну дату:</b>
 """

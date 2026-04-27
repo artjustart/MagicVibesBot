@@ -32,6 +32,10 @@ def _booking_admin_kb(booking_id: int, user_telegram_id: Optional[int]) -> Inlin
         InlineKeyboardButton(text="✅ Підтвердити", callback_data=f"admin_confirm_booking_{booking_id}"),
         InlineKeyboardButton(text="❌ Скасувати", callback_data=f"admin_cancel_booking_{booking_id}"),
     )
+    kb.row(InlineKeyboardButton(
+        text="🔁 Змінити статус / деталі",
+        callback_data=f"admin_open_booking_{booking_id}",
+    ))
     if user_telegram_id:
         kb.row(InlineKeyboardButton(
             text="💬 Написати клієнту",

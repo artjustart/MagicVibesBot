@@ -4,6 +4,8 @@
 from datetime import datetime, timedelta
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, BaseFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +13,7 @@ from sqlalchemy import select, func
 
 from database.models import (
     Booking, Practice, PracticeSchedule, User, Payment,
-    BookingStatus, PaymentStatus, CourseEnrollment, Course,
+    BookingStatus, PaymentStatus, PracticeType, CourseEnrollment, Course,
 )
 
 
@@ -34,11 +36,24 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="📋  Заявки сьогодні", callback_data="admin_today"))
     kb.row(InlineKeyboardButton(text="📅  Найближчі практики", callback_data="admin_upcoming"))
+    kb.row(InlineKeyboardButton(text="🪷  Керування практиками", callback_data="admin_practices"))
     kb.row(InlineKeyboardButton(text="👥  Клієнти", callback_data="admin_clients"))
     kb.row(InlineKeyboardButton(text="💳  Платежі", callback_data="admin_payments"))
     kb.row(InlineKeyboardButton(text="📊  Статистика", callback_data="admin_stats"))
     kb.row(InlineKeyboardButton(text="❌  Закрити", callback_data="admin_close"))
     return kb.as_markup()
+
+
+# FSM-стани для майстрів створення/редагування
+class AdminStates(StatesGroup):
+    new_practice_title = State()
+    new_practice_description = State()
+    new_practice_price = State()
+    new_practice_duration = State()
+    new_practice_max = State()
+
+    edit_field_value = State()  # очікуємо нове значення для поля
+    add_schedule_datetime = State()
 
 
 def admin_back_kb() -> InlineKeyboardMarkup:
@@ -436,3 +451,509 @@ async def cb_admin_course_done(callback: CallbackQuery, session: AsyncSession):
     except Exception:
         pass
     await callback.answer("Позначено як опрацьовано")
+
+
+# ────────────────────── Зміна статусу бронювання ──────────────────────
+
+STATUS_CYCLE = [
+    (BookingStatus.PENDING, "⏳ Очікує оплати"),
+    (BookingStatus.CONFIRMED, "✅ Підтверджено"),
+    (BookingStatus.COMPLETED, "🏁 Завершено"),
+    (BookingStatus.CANCELLED, "❌ Скасовано"),
+]
+
+
+@router.callback_query(F.data.startswith("admin_setstatus_"))
+async def cb_admin_set_status(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Встановлення статусу бронювання: admin_setstatus_<booking_id>_<status>"""
+    try:
+        _, _, booking_id_s, status_s = callback.data.split("_", 3)
+        booking_id = int(booking_id_s)
+        new_status = BookingStatus(status_s)
+    except Exception:
+        await callback.answer("Невірна команда", show_alert=True)
+        return
+
+    booking = await session.get(Booking, booking_id)
+    if not booking:
+        await callback.answer("Бронювання не знайдено", show_alert=True)
+        return
+
+    old_status = booking.status
+    booking.status = new_status
+
+    # Якщо скасовуємо — повертаємо місце; якщо було скасовано і відновлюємо — забираємо
+    schedule = await session.get(PracticeSchedule, booking.schedule_id)
+    if schedule:
+        if old_status != BookingStatus.CANCELLED and new_status == BookingStatus.CANCELLED:
+            schedule.available_slots += 1
+            schedule.is_available = True
+        elif old_status == BookingStatus.CANCELLED and new_status != BookingStatus.CANCELLED:
+            if schedule.available_slots > 0:
+                schedule.available_slots -= 1
+            if schedule.available_slots == 0:
+                schedule.is_available = False
+
+    await session.commit()
+
+    # Сповіщаємо клієнта
+    user = await session.get(User, booking.user_id)
+    practice = await session.get(Practice, booking.practice_id)
+    if user and practice:
+        client_messages = {
+            BookingStatus.CONFIRMED: f"✅ Вашу заявку на «{practice.title}» підтверджено! 🤍",
+            BookingStatus.CANCELLED: f"❌ Вашу заявку на «{practice.title}» скасовано. Якщо це помилка — звʼяжіться з менеджером.",
+            BookingStatus.COMPLETED: f"🏁 Дякуємо що відвідали «{practice.title}»! 💫",
+        }
+        msg = client_messages.get(new_status)
+        if msg:
+            try:
+                await bot.send_message(user.telegram_id, msg, parse_mode="HTML")
+            except Exception:
+                pass
+
+    status_label = dict(STATUS_CYCLE).get(new_status, str(new_status))
+    await callback.answer(f"Статус: {status_label}")
+    # Оновити повідомлення-карту бронювання
+    await _send_booking_card(bot, callback.message.chat.id, session, booking_id, edit_message=callback.message)
+
+
+def _booking_status_kb(booking_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for status, label in STATUS_CYCLE:
+        kb.row(InlineKeyboardButton(
+            text=f"{label}",
+            callback_data=f"admin_setstatus_{booking_id}_{status.value}",
+        ))
+    kb.row(InlineKeyboardButton(text="◀️ Закрити", callback_data="admin_close"))
+    return kb.as_markup()
+
+
+async def _send_booking_card(bot: Bot, chat_id: int, session: AsyncSession, booking_id: int, edit_message: Message = None):
+    booking = await session.get(Booking, booking_id)
+    if not booking:
+        return
+    practice = await session.get(Practice, booking.practice_id)
+    schedule = await session.get(PracticeSchedule, booking.schedule_id)
+    user = await session.get(User, booking.user_id)
+
+    status_label = dict(STATUS_CYCLE).get(booking.status, str(booking.status))
+    handle = f"@{user.username}" if user and user.username else (user.full_name if user else "?")
+    date_str = schedule.datetime.strftime("%d.%m.%Y о %H:%M") if schedule else "—"
+
+    text = (
+        f"📋 <b>Бронювання #{booking.id}</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"🪷  <b>{practice.title if practice else '?'}</b>\n"
+        f"📅  {date_str}\n"
+        f"💰  {int(practice.price) if practice else 0} грн\n"
+        f"👤  {handle}\n\n"
+        f"<b>Поточний статус:</b>  {status_label}\n\n"
+        "👇 Оберіть новий статус:"
+    )
+
+    kb = _booking_status_kb(booking.id)
+    if edit_message:
+        try:
+            await edit_message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(F.text.regexp(r"^/booking_\d+"))
+async def cmd_booking(message: Message, session: AsyncSession, bot: Bot):
+    """Деталі бронювання: /booking_<id>"""
+    try:
+        booking_id = int(message.text.split("_", 1)[1].split()[0])
+    except Exception:
+        await message.answer("Невірний формат. /booking_<id>")
+        return
+    await _send_booking_card(bot, message.chat.id, session, booking_id)
+
+
+@router.callback_query(F.data.startswith("admin_open_booking_"))
+async def cb_admin_open_booking(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Відкрити повну картку бронювання зі статусами."""
+    try:
+        booking_id = int(callback.data.replace("admin_open_booking_", ""))
+    except Exception:
+        await callback.answer("Невірна команда", show_alert=True)
+        return
+    await _send_booking_card(bot, callback.message.chat.id, session, booking_id)
+    await callback.answer()
+
+
+# ────────────────────── 🪷 Керування практиками ──────────────────────
+
+def _practices_admin_kb(practices: list) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for p in practices:
+        emoji = "🟢" if p.is_active else "⚪️"
+        kb.row(InlineKeyboardButton(
+            text=f"{emoji}  {p.title}",
+            callback_data=f"admin_p_{p.id}",
+        ))
+    kb.row(InlineKeyboardButton(text="➕  Створити нову практику", callback_data="admin_p_new"))
+    kb.row(InlineKeyboardButton(text="◀️  До адмін-меню", callback_data="admin_menu"))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data == "admin_practices")
+async def cb_admin_practices(callback: CallbackQuery, session: AsyncSession):
+    result = await session.execute(select(Practice).order_by(Practice.is_active.desc(), Practice.id))
+    practices = result.scalars().all()
+
+    text = (
+        "🪷 <b>КЕРУВАННЯ ПРАКТИКАМИ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "🟢 = активна  •  ⚪️ = неактивна\n"
+        "👇 Оберіть практику або створіть нову:"
+    )
+    await callback.message.edit_text(text, reply_markup=_practices_admin_kb(practices), parse_mode="HTML")
+    await callback.answer()
+
+
+def _practice_card_kb(practice: Practice) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📅  Розклад", callback_data=f"admin_p_sched_{practice.id}"))
+    kb.row(InlineKeyboardButton(text="➕  Додати дату", callback_data=f"admin_p_addsched_{practice.id}"))
+    kb.row(
+        InlineKeyboardButton(text="✏️ Назва", callback_data=f"admin_p_edit_{practice.id}_title"),
+        InlineKeyboardButton(text="✏️ Опис", callback_data=f"admin_p_edit_{practice.id}_description"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="✏️ Ціна", callback_data=f"admin_p_edit_{practice.id}_price"),
+        InlineKeyboardButton(text="✏️ Тривалість", callback_data=f"admin_p_edit_{practice.id}_duration_minutes"),
+    )
+    kb.row(InlineKeyboardButton(text="✏️  Макс. учасників", callback_data=f"admin_p_edit_{practice.id}_max_participants"))
+    toggle = "⚪️ Деактивувати" if practice.is_active else "🟢 Активувати"
+    kb.row(InlineKeyboardButton(text=toggle, callback_data=f"admin_p_toggle_{practice.id}"))
+    kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_practices"))
+    return kb.as_markup()
+
+
+def _format_practice_card(practice: Practice) -> str:
+    state = "🟢 активна" if practice.is_active else "⚪️ неактивна"
+    desc_preview = (practice.description or "")[:200]
+    if len(practice.description or "") > 200:
+        desc_preview += "..."
+    return (
+        f"🪷 <b>{practice.title}</b>  ({state})\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>Опис (превʼю):</b>\n<i>{desc_preview}</i>\n\n"
+        f"💰  <b>Ціна:</b>  {int(practice.price)} грн\n"
+        f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
+        f"👥  <b>Макс. учасників:</b>  {practice.max_participants or '—'}\n"
+        f"🏷  <b>Тип:</b>  {practice.practice_type.value}"
+    )
+
+
+@router.callback_query(F.data.regexp(r"^admin_p_\d+$"))
+async def cb_admin_practice_card(callback: CallbackQuery, session: AsyncSession):
+    practice_id = int(callback.data.replace("admin_p_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    await callback.message.edit_text(
+        _format_practice_card(practice),
+        reply_markup=_practice_card_kb(practice),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_p_toggle_"))
+async def cb_admin_practice_toggle(callback: CallbackQuery, session: AsyncSession):
+    practice_id = int(callback.data.replace("admin_p_toggle_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    practice.is_active = not practice.is_active
+    await session.commit()
+    await callback.answer("Активовано" if practice.is_active else "Деактивовано")
+    await callback.message.edit_text(
+        _format_practice_card(practice),
+        reply_markup=_practice_card_kb(practice),
+        parse_mode="HTML",
+    )
+
+
+# ── Розклад практики (адмін)
+
+@router.callback_query(F.data.startswith("admin_p_sched_"))
+async def cb_admin_practice_schedule(callback: CallbackQuery, session: AsyncSession):
+    practice_id = int(callback.data.replace("admin_p_sched_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    result = await session.execute(
+        select(PracticeSchedule).where(
+            PracticeSchedule.practice_id == practice_id,
+        ).order_by(PracticeSchedule.datetime)
+    )
+    schedules = result.scalars().all()
+
+    lines = [f"📅 <b>Розклад: {practice.title}</b>", "━━━━━━━━━━━━━━━━━", ""]
+    kb = InlineKeyboardBuilder()
+
+    if not schedules:
+        lines.append("<i>Поки немає жодної дати.</i>")
+    else:
+        for s in schedules:
+            past = "🕓 " if s.datetime < datetime.utcnow() else ""
+            lines.append(
+                f"{past}<b>{s.datetime.strftime('%d.%m.%Y %H:%M')}</b>  •  залишилось {s.available_slots}"
+            )
+            kb.row(InlineKeyboardButton(
+                text=f"🗑  {s.datetime.strftime('%d.%m %H:%M')}",
+                callback_data=f"admin_sched_del_{s.id}",
+            ))
+
+    kb.row(InlineKeyboardButton(text="➕  Додати дату", callback_data=f"admin_p_addsched_{practice_id}"))
+    kb.row(InlineKeyboardButton(text="◀️  Назад", callback_data=f"admin_p_{practice_id}"))
+
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_sched_del_"))
+async def cb_admin_schedule_delete(callback: CallbackQuery, session: AsyncSession):
+    sched_id = int(callback.data.replace("admin_sched_del_", ""))
+    sched = await session.get(PracticeSchedule, sched_id)
+    if not sched:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    practice_id = sched.practice_id
+    # Перевіримо чи є активні бронювання — якщо так, не видаляємо, лише позначаємо як недоступне
+    bookings_result = await session.execute(
+        select(func.count()).select_from(Booking).where(
+            Booking.schedule_id == sched_id,
+            Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED]),
+        )
+    )
+    active_bookings = bookings_result.scalar() or 0
+    if active_bookings > 0:
+        sched.is_available = False
+        await session.commit()
+        await callback.answer("Має активні бронювання — лише прихована", show_alert=True)
+    else:
+        await session.delete(sched)
+        await session.commit()
+        await callback.answer("Дату видалено")
+    # повертаємось до розкладу
+    callback.data = f"admin_p_sched_{practice_id}"
+    await cb_admin_practice_schedule(callback, session)
+
+
+# ── Додавання дати до розкладу
+
+@router.callback_query(F.data.startswith("admin_p_addsched_"))
+async def cb_admin_addsched_start(callback: CallbackQuery, state: FSMContext):
+    practice_id = int(callback.data.replace("admin_p_addsched_", ""))
+    await state.set_state(AdminStates.add_schedule_datetime)
+    await state.update_data(practice_id=practice_id)
+    await callback.message.answer(
+        "📅 <b>Додавання дати</b>\n\n"
+        "Надішліть дату й час у форматі <code>ДД.ММ.РРРР ГГ:ХХ</code>\n"
+        "Наприклад: <code>11.05.2026 11:00</code>\n\n"
+        "Або /cancel для відміни.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.add_schedule_datetime, F.text == "/cancel")
+async def admin_addsched_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Скасовано.")
+
+
+@router.message(AdminStates.add_schedule_datetime)
+async def admin_addsched_apply(message: Message, state: FSMContext, session: AsyncSession):
+    try:
+        dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
+    except Exception:
+        await message.answer("❌ Невірний формат. Спробуйте: <code>ДД.ММ.РРРР ГГ:ХХ</code>", parse_mode="HTML")
+        return
+
+    data = await state.get_data()
+    practice_id = data.get("practice_id")
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await message.answer("Практику не знайдено")
+        await state.clear()
+        return
+
+    sched = PracticeSchedule(
+        practice_id=practice_id,
+        datetime=dt,
+        available_slots=practice.max_participants or 13,
+        is_available=True,
+    )
+    session.add(sched)
+    await session.commit()
+    await state.clear()
+    await message.answer(f"✅ Додано дату <b>{dt.strftime('%d.%m.%Y %H:%M')}</b>", parse_mode="HTML")
+
+
+# ── Редагування поля практики (одне поле через FSM)
+
+@router.callback_query(F.data.regexp(r"^admin_p_edit_\d+_(title|description|price|duration_minutes|max_participants)$"))
+async def cb_admin_practice_edit_start(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    practice_id = int(parts[3])
+    field = "_".join(parts[4:])
+    await state.set_state(AdminStates.edit_field_value)
+    await state.update_data(practice_id=practice_id, field=field)
+
+    prompts = {
+        "title": "Надішліть нову назву практики:",
+        "description": "Надішліть новий опис (можна з HTML-тегами <b>, <i>, переноси рядків):",
+        "price": "Надішліть нову ціну в грн (число):",
+        "duration_minutes": "Надішліть нову тривалість у хвилинах (число):",
+        "max_participants": "Надішліть нове максимальне число учасників (число):",
+    }
+    await callback.message.answer(
+        f"✏️ <b>Редагування</b>\n\n{prompts[field]}\n\nАбо /cancel для відміни.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.edit_field_value, F.text == "/cancel")
+async def admin_edit_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Скасовано.")
+
+
+@router.message(AdminStates.edit_field_value)
+async def admin_edit_apply(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    practice_id = data.get("practice_id")
+    field = data.get("field")
+
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await message.answer("Практику не знайдено")
+        await state.clear()
+        return
+
+    raw = message.text.strip()
+    try:
+        if field in ("price",):
+            value = float(raw.replace(",", "."))
+        elif field in ("duration_minutes", "max_participants"):
+            value = int(raw)
+        else:
+            value = raw
+    except ValueError:
+        await message.answer("❌ Очікувалось число. Спробуйте ще раз або /cancel.")
+        return
+
+    setattr(practice, field, value)
+    await session.commit()
+    await state.clear()
+
+    await message.answer(
+        "✅ Збережено.\n\n" + _format_practice_card(practice),
+        reply_markup=_practice_card_kb(practice),
+        parse_mode="HTML",
+    )
+
+
+# ── Створення нової практики через FSM
+
+@router.callback_query(F.data == "admin_p_new")
+async def cb_admin_practice_new(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.new_practice_title)
+    await callback.message.answer(
+        "✨ <b>Створення нової практики</b>\n\n"
+        "Крок 1/5: надішліть <b>назву</b> практики.\n"
+        "Або /cancel для відміни.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.new_practice_title, F.text == "/cancel")
+@router.message(AdminStates.new_practice_description, F.text == "/cancel")
+@router.message(AdminStates.new_practice_price, F.text == "/cancel")
+@router.message(AdminStates.new_practice_duration, F.text == "/cancel")
+@router.message(AdminStates.new_practice_max, F.text == "/cancel")
+async def new_practice_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Створення скасовано.")
+
+
+@router.message(AdminStates.new_practice_title)
+async def new_practice_title(message: Message, state: FSMContext):
+    await state.update_data(title=message.text.strip())
+    await state.set_state(AdminStates.new_practice_description)
+    await message.answer("Крок 2/5: надішліть <b>опис</b> (можна з HTML).", parse_mode="HTML")
+
+
+@router.message(AdminStates.new_practice_description)
+async def new_practice_description(message: Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await state.set_state(AdminStates.new_practice_price)
+    await message.answer("Крок 3/5: надішліть <b>ціну</b> в грн (число).", parse_mode="HTML")
+
+
+@router.message(AdminStates.new_practice_price)
+async def new_practice_price(message: Message, state: FSMContext):
+    try:
+        price = float(message.text.strip().replace(",", "."))
+    except ValueError:
+        await message.answer("❌ Очікувалось число. Спробуйте ще раз.")
+        return
+    await state.update_data(price=price)
+    await state.set_state(AdminStates.new_practice_duration)
+    await message.answer("Крок 4/5: надішліть <b>тривалість</b> у хвилинах (число).", parse_mode="HTML")
+
+
+@router.message(AdminStates.new_practice_duration)
+async def new_practice_duration(message: Message, state: FSMContext):
+    try:
+        duration = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Очікувалось ціле число. Спробуйте ще раз.")
+        return
+    await state.update_data(duration=duration)
+    await state.set_state(AdminStates.new_practice_max)
+    await message.answer("Крок 5/5: надішліть <b>максимум учасників</b> (число).", parse_mode="HTML")
+
+
+@router.message(AdminStates.new_practice_max)
+async def new_practice_max(message: Message, state: FSMContext, session: AsyncSession):
+    try:
+        max_p = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Очікувалось ціле число. Спробуйте ще раз.")
+        return
+
+    data = await state.get_data()
+    practice = Practice(
+        title=data["title"],
+        description=data["description"],
+        practice_type=PracticeType.GROUP,
+        duration_minutes=data["duration"],
+        price=data["price"],
+        max_participants=max_p,
+        is_active=True,
+    )
+    session.add(practice)
+    await session.commit()
+    await session.refresh(practice)
+    await state.clear()
+
+    await message.answer(
+        "🎉 <b>Практику створено!</b>\n\n" + _format_practice_card(practice),
+        reply_markup=_practice_card_kb(practice),
+        parse_mode="HTML",
+    )
