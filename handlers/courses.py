@@ -10,17 +10,19 @@ from datetime import datetime, timedelta
 from database.models import Course, CourseEnrollment, Payment, User, CourseType, PaymentStatus
 from keyboards.inline import (
     get_course_enrollment_keyboard,
+    get_three_month_request_keyboard,
     get_payment_keyboard,
     get_back_to_main_menu,
 )
 from services.monopay import MonoPayService
+from services.notifications import notify_new_course_request
 
 router = Router()
 
 
 @router.callback_query(F.data == "starter_course")
 async def show_starter_course(callback: CallbackQuery, session: AsyncSession):
-    """Стартовий онлайн-курс"""
+    """Стартовий онлайн-курс — поки в розробці"""
     result = await session.execute(
         select(Course).where(
             Course.is_active == True,
@@ -29,7 +31,7 @@ async def show_starter_course(callback: CallbackQuery, session: AsyncSession):
     )
     course = result.scalar_one_or_none()
 
-    if course:
+    if False and course:  # Тимчасово відключено: курсу ще немає
         text = f"""
 🌟 <b>{course.title}</b>
 
@@ -57,8 +59,14 @@ async def show_starter_course(callback: CallbackQuery, session: AsyncSession):
         text = """
 🌟 <b>Стартовий онлайн-курс</b>
 
-На жаль, курс тимчасово недоступний.
-Звʼяжіться з менеджером, щоб дізнатися деталі.
+🚧  Цей курс зараз у розробці.
+
+Слідкуйте за оновленнями — скоро ми відкриємо доступ до повноцінного онлайн-курсу 🤍
+
+Поки що ви можете:
+• 🪷  Записатися на актуальну практику
+• 🧘‍♀️  Замовити індивідуальну сесію
+• 💬  Звʼязатися з менеджером для консультації
 """
         await callback.message.edit_text(
             text=text,
@@ -100,11 +108,14 @@ async def show_three_month_course(callback: CallbackQuery, session: AsyncSession
 • Сертифікат після завершення
 
 Це повноцінна програма для глибокої трансформації 💫
+
+━━━━━━━━━━━━━━━━━
+👇 <b>Залиште заявку</b> — наш менеджер звʼяжеться з вами найближчим часом, відповість на питання та підкаже наступні кроки.
 """
 
         await callback.message.edit_text(
             text=text,
-            reply_markup=get_course_enrollment_keyboard(course.id),
+            reply_markup=get_three_month_request_keyboard(),
             parse_mode="HTML",
         )
     else:
@@ -121,6 +132,86 @@ async def show_three_month_course(callback: CallbackQuery, session: AsyncSession
         )
 
     await callback.answer()
+
+
+@router.callback_query(F.data == "request_three_month")
+async def request_three_month_course(callback: CallbackQuery, session: AsyncSession, config):
+    """Заявка на 3-місячне навчання — без оплати, менеджер контактує сам."""
+    result = await session.execute(
+        select(Course).where(
+            Course.is_active == True,
+            Course.course_type == CourseType.THREE_MONTH,
+        ).limit(1)
+    )
+    course = result.scalar_one_or_none()
+
+    if not course:
+        await callback.answer("Курс наразі недоступний", show_alert=True)
+        return
+
+    # Реєструємо/знаходимо користувача
+    result = await session.execute(
+        select(User).where(User.telegram_id == callback.from_user.id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(
+            telegram_id=callback.from_user.id,
+            username=callback.from_user.username,
+            full_name=callback.from_user.full_name or "",
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+    # Якщо вже є активна/відкрита заявка — не дублюємо
+    existing = await session.execute(
+        select(CourseEnrollment).where(
+            CourseEnrollment.user_id == user.id,
+            CourseEnrollment.course_id == course.id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        await callback.message.edit_text(
+            "✅ <b>Заявку вже отримано!</b>\n\n"
+            "Наш менеджер скоро звʼяжеться з вами 🤍",
+            reply_markup=get_back_to_main_menu(),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    # Створюємо заявку (без оплати, is_active=False до підтвердження менеджером)
+    enrollment = CourseEnrollment(
+        user_id=user.id,
+        course_id=course.id,
+        is_active=False,
+    )
+    session.add(enrollment)
+    await session.commit()
+    await session.refresh(enrollment)
+
+    # Уведомляем админов
+    try:
+        await notify_new_course_request(callback.bot, config.tg_bot.admin_ids, session, enrollment.id)
+    except Exception:
+        pass
+
+    await callback.message.edit_text(
+        f"""
+✅ <b>Дякуємо! Вашу заявку отримано 🤍</b>
+
+📚  <b>Курс:</b>  {course.title}
+
+━━━━━━━━━━━━━━━━━
+Наш менеджер звʼяжеться з вами найближчим часом, відповість на всі питання та допоможе зі стартом.
+
+Гарного дня 🪷
+""",
+        reply_markup=get_back_to_main_menu(),
+        parse_mode="HTML",
+    )
+    await callback.answer("Заявку надіслано")
 
 
 @router.callback_query(F.data.startswith("course_details_"))

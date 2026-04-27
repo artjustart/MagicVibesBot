@@ -21,6 +21,7 @@ from keyboards.inline import (
     get_back_to_main_menu,
 )
 from services.monopay import MonoPayService
+from services.notifications import notify_new_booking, notify_payment_success
 
 router = Router()
 
@@ -197,7 +198,7 @@ async def show_practice_schedule(callback: CallbackQuery, session: AsyncSession)
 
 
 @router.callback_query(F.data.startswith("book_"))
-async def create_booking(callback: CallbackQuery, session: AsyncSession):
+async def create_booking(callback: CallbackQuery, session: AsyncSession, config):
     """Створення бронювання"""
     schedule_id = int(callback.data.replace("book_", ""))
     schedule = await session.get(PracticeSchedule, schedule_id)
@@ -227,6 +228,12 @@ async def create_booking(callback: CallbackQuery, session: AsyncSession):
 
     await session.commit()
     await session.refresh(booking)
+
+    # Уведомлюємо адмінів про нову заявку
+    try:
+        await notify_new_booking(callback.bot, config.tg_bot.admin_ids, session, booking.id)
+    except Exception:
+        pass
 
     date_str = schedule.datetime.strftime("%d.%m.%Y о %H:%M")
     text = f"""
@@ -329,7 +336,7 @@ async def confirm_booking_and_pay(callback: CallbackQuery, session: AsyncSession
 
 
 @router.callback_query(F.data.startswith("check_payment_"))
-async def check_payment(callback: CallbackQuery, session: AsyncSession, mono_service: MonoPayService):
+async def check_payment(callback: CallbackQuery, session: AsyncSession, mono_service: MonoPayService, config):
     """Перевірка статусу платежу"""
     payment_id = int(callback.data.replace("check_payment_", ""))
     payment = await session.get(Payment, payment_id)
@@ -349,6 +356,12 @@ async def check_payment(callback: CallbackQuery, session: AsyncSession, mono_ser
             booking.status = BookingStatus.CONFIRMED
 
             await session.commit()
+
+            # Уведомлюємо адмінів про оплату
+            try:
+                await notify_payment_success(callback.bot, config.tg_bot.admin_ids, session, payment.id)
+            except Exception:
+                pass
 
             practice = await session.get(Practice, booking.practice_id)
             schedule = await session.get(PracticeSchedule, booking.schedule_id)

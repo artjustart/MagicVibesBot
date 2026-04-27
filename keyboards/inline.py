@@ -160,6 +160,20 @@ def get_courses_keyboard(courses: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_three_month_request_keyboard() -> InlineKeyboardMarkup:
+    """Заявка на 3-місячне навчання (без оплати — менеджер сам зв'яжеться)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="✨   ЗАЛИШИТИ ЗАЯВКУ   ✨",
+        callback_data="request_three_month",
+    ))
+    builder.row(InlineKeyboardButton(
+        text="◀️  До головного меню",
+        callback_data="main_menu",
+    ))
+    return builder.as_markup()
+
+
 def get_course_enrollment_keyboard(course_id: int) -> InlineKeyboardMarkup:
     """Запис на курс"""
     builder = InlineKeyboardBuilder()

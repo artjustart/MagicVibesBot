@@ -19,6 +19,7 @@ from keyboards.inline import (
     get_back_to_main_menu,
 )
 from services.monopay import MonoPayService
+from services.notifications import notify_new_individual_request
 
 router = Router()
 
@@ -119,7 +120,7 @@ async def choose_individual_datetime(callback: CallbackQuery, state: FSMContext,
 
 
 @router.message(IndividualSessionStates.waiting_for_datetime)
-async def process_individual_datetime(message: Message, state: FSMContext, session: AsyncSession):
+async def process_individual_datetime(message: Message, state: FSMContext, session: AsyncSession, config):
     """Обробка введеної дати і часу"""
     try:
         desired_datetime = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
@@ -164,6 +165,12 @@ async def process_individual_datetime(message: Message, state: FSMContext, sessi
 
         await session.commit()
         await session.refresh(booking)
+
+        # Уведомляем админов про заявку на индивидуальную
+        try:
+            await notify_new_individual_request(message.bot, config.tg_bot.admin_ids, session, booking.id)
+        except Exception:
+            pass
 
         await state.clear()
 

@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, BotCommandScopeDefault, MenuButtonCommands
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat, MenuButtonCommands
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from config.settings import load_config
@@ -14,7 +14,7 @@ from database.models import Base
 from services.monopay import MonoPayService
 
 # Импорт роутеров
-from handlers import menu, practices, individual, courses
+from handlers import menu, practices, individual, courses, admin
 
 # Настройка логирования
 logging.basicConfig(
@@ -28,15 +28,27 @@ async def on_startup(bot: Bot, config):
     """Действия при запуске бота"""
     logger.info("Bot starting...")
 
-    # Меню-команди (відображаються при натисканні кнопки "Меню" біля поля вводу)
-    await bot.set_my_commands(
-        commands=[
-            BotCommand(command="start", description="🚀 Запустити бота"),
-            BotCommand(command="menu", description="🪷 Головне меню"),
-            BotCommand(command="help", description="ℹ️ Допомога"),
-        ],
-        scope=BotCommandScopeDefault(),
-    )
+    # Меню-команди для всіх користувачів
+    user_commands = [
+        BotCommand(command="start", description="🚀 Запустити бота"),
+        BotCommand(command="menu", description="🪷 Головне меню"),
+        BotCommand(command="help", description="ℹ️ Допомога"),
+    ]
+    await bot.set_my_commands(commands=user_commands, scope=BotCommandScopeDefault())
+
+    # Розширений набір для адмінів (видно лише їм)
+    admin_commands = user_commands + [
+        BotCommand(command="admin", description="🛠 Адмін-панель"),
+    ]
+    for admin_id in config.tg_bot.admin_ids:
+        try:
+            await bot.set_my_commands(
+                commands=admin_commands,
+                scope=BotCommandScopeChat(chat_id=admin_id),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to set admin commands for {admin_id}: {e}")
+
     # Кнопка "Menu" біля поля вводу повідомлень
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
@@ -93,7 +105,8 @@ async def main():
             data['config'] = config
             return await handler(event, data)
     
-    # Регистрируем роутеры
+    # Регистрируем роутеры (admin — першим, щоб /admin перехоплювався фільтром)
+    dp.include_router(admin.router)
     dp.include_router(menu.router)
     dp.include_router(practices.router)
     dp.include_router(individual.router)
