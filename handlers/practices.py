@@ -73,14 +73,10 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
     bot = callback.bot
     chat_id = callback.from_user.id
 
-    # Шапка
+    # Шапка (компактна — не ламається на вузьких екранах)
     await bot.send_message(
         chat_id=chat_id,
-        text=(
-            "✨━━━━━━━━━━━━━━━━━━━━✨\n"
-            "        🪷  <b>АКТУАЛЬНІ ПРАКТИКИ</b>  🪷\n"
-            "✨━━━━━━━━━━━━━━━━━━━━✨"
-        ),
+        text="🪷 <b>АКТУАЛЬНІ ПРАКТИКИ</b> 🪷",
         parse_mode="HTML",
     )
 
