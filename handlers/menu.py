@@ -62,6 +62,24 @@ async def cmd_help(message: Message):
     )
 
 
+@router.message(Command("myid"))
+async def cmd_myid(message: Message):
+    """Команда /myid — показує користувачу його Telegram ID.
+    Для майбутніх адмінів: написати ботові /myid і надіслати число основному адміну."""
+    user = message.from_user
+    handle = f"@{user.username}" if user.username else "<i>(без username)</i>"
+    await message.answer(
+        "🪪 <b>Ваш Telegram ID</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"<code>{user.id}</code>\n\n"
+        f"👤  {user.full_name}  •  {handle}\n\n"
+        "<i>Натисніть на число щоб скопіювати.\n"
+        "Щоб стати адміном — надішліть це число основному адміну,\n"
+        "він додасть вас у список ADMIN_IDS.</i>",
+        parse_mode="HTML",
+    )
+
+
 @router.callback_query(F.data == "main_menu")
 async def show_main_menu(callback: CallbackQuery, state: FSMContext):
     """Повернення до головного меню"""
