@@ -43,6 +43,7 @@ async def on_startup(bot: Bot, config):
     # Розширений набір для адмінів (видно лише їм)
     admin_commands = user_commands + [
         BotCommand(command="admin", description="🛠 Адмін-панель"),
+        BotCommand(command="backup", description="💾 Бекап БД"),
     ]
     for admin_id in config.tg_bot.admin_ids:
         try:

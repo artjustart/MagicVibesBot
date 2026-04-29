@@ -56,7 +56,6 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="👥  Клієнти", callback_data="admin_clients"))
     kb.row(InlineKeyboardButton(text="💳  Платежі", callback_data="admin_payments"))
     kb.row(InlineKeyboardButton(text="📊  Статистика", callback_data="admin_stats"))
-    kb.row(InlineKeyboardButton(text="💾  Бекап БД", callback_data="admin_backup"))
     kb.row(InlineKeyboardButton(text="❌  Закрити", callback_data="admin_close"))
     return kb.as_markup()
 
@@ -104,10 +103,10 @@ async def cb_admin_menu(callback: CallbackQuery):
 BACKUPS_DIR = Path("/opt/magic_vibes_bot/backups")
 
 
-@router.callback_query(F.data == "admin_backup")
-async def cb_admin_backup(callback: CallbackQuery, config):
-    """Зробити дамп БД через pg_dump, зберегти на VPS і надіслати админу .sql.gz."""
-    await callback.answer("⏳ Створюю бекап...", show_alert=False)
+@router.message(Command("backup"))
+async def cmd_backup(message: Message, config):
+    """Команда /backup — дамп БД через pg_dump, зберегти на VPS і надіслати .sql.gz."""
+    await message.answer("⏳ Створюю бекап...")
 
     db = config.db
     cmd = [
@@ -132,7 +131,7 @@ async def cb_admin_backup(callback: CallbackQuery, config):
         )
         stdout, stderr = await proc.communicate()
     except FileNotFoundError:
-        await callback.message.answer(
+        await message.answer(
             "❌ <b>pg_dump не знайдено</b>\n\n"
             "Встановіть на VPS: <code>apt install -y postgresql-client</code>",
             parse_mode="HTML",
@@ -141,7 +140,7 @@ async def cb_admin_backup(callback: CallbackQuery, config):
 
     if proc.returncode != 0:
         err = (stderr or b"").decode("utf-8", errors="replace")[:1500]
-        await callback.message.answer(
+        await message.answer(
             f"❌ <b>pg_dump failed</b> (rc={proc.returncode})\n\n<pre>{err}</pre>",
             parse_mode="HTML",
         )
@@ -172,8 +171,8 @@ async def cb_admin_backup(callback: CallbackQuery, config):
         "який можна відновити через psql.</i>"
     )
 
-    await callback.bot.send_document(
-        chat_id=callback.from_user.id,
+    await message.bot.send_document(
+        chat_id=message.from_user.id,
         document=BufferedInputFile(compressed, filename=filename),
         caption=caption,
         parse_mode="HTML",
