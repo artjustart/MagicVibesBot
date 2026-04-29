@@ -47,6 +47,7 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
     result = await session.execute(
         select(Practice).where(
             Practice.is_active == True,
+            Practice.is_archived == False,
             Practice.practice_type == PracticeType.GROUP,
         )
     )

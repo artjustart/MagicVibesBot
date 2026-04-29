@@ -612,8 +612,30 @@ def _practices_admin_kb(practices: list) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "admin_practices")
 async def cb_admin_practices(callback: CallbackQuery, session: AsyncSession):
-    result = await session.execute(select(Practice).order_by(Practice.is_active.desc(), Practice.id))
+    """Список НЕархівних практик."""
+    result = await session.execute(
+        select(Practice).where(Practice.is_archived == False)
+        .order_by(Practice.is_active.desc(), Practice.id)
+    )
     practices = result.scalars().all()
+
+    archived_count = (await session.execute(
+        select(func.count()).select_from(Practice).where(Practice.is_archived == True)
+    )).scalar() or 0
+
+    kb = InlineKeyboardBuilder()
+    for p in practices:
+        emoji = "🟢" if p.is_active else "⚪️"
+        kb.row(InlineKeyboardButton(
+            text=f"{emoji}  {p.title}",
+            callback_data=f"admin_p_{p.id}",
+        ))
+    kb.row(InlineKeyboardButton(text="➕  Створити нову практику", callback_data="admin_p_new"))
+    kb.row(InlineKeyboardButton(
+        text=f"📦  Архів  ({archived_count})",
+        callback_data="admin_archive",
+    ))
+    kb.row(InlineKeyboardButton(text="◀️  До адмін-меню", callback_data="admin_menu"))
 
     text = (
         "🪷 <b>КЕРУВАННЯ ПРАКТИКАМИ</b>\n"
@@ -621,7 +643,7 @@ async def cb_admin_practices(callback: CallbackQuery, session: AsyncSession):
         "🟢 = активна  •  ⚪️ = неактивна\n"
         "👇 Оберіть практику або створіть нову:"
     )
-    await callback.message.edit_text(text, reply_markup=_practices_admin_kb(practices), parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -644,7 +666,7 @@ def _practice_card_kb(practice: Practice) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="✏️  Макс. учасників", callback_data=f"admin_p_edit_{practice.id}_max_participants"))
     toggle = "⚪️ Деактивувати" if practice.is_active else "🟢 Активувати"
     kb.row(InlineKeyboardButton(text=toggle, callback_data=f"admin_p_toggle_{practice.id}"))
-    kb.row(InlineKeyboardButton(text="🗑  Видалити практику", callback_data=f"admin_p_del_{practice.id}"))
+    kb.row(InlineKeyboardButton(text="📦  Архівувати", callback_data=f"admin_p_archive_{practice.id}"))
     kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_practices"))
     return kb.as_markup()
 
@@ -680,16 +702,78 @@ async def cb_admin_practice_card(callback: CallbackQuery, session: AsyncSession)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_p_del_"))
-async def cb_admin_practice_delete_warn(callback: CallbackQuery, session: AsyncSession):
-    """Перший крок — попередження + підтвердження."""
-    practice_id = int(callback.data.replace("admin_p_del_", ""))
+@router.callback_query(F.data.startswith("admin_p_archive_"))
+async def cb_admin_practice_archive(callback: CallbackQuery, session: AsyncSession):
+    """Архівувати практику — приховує від клієнтів, дані зберігаються."""
+    practice_id = int(callback.data.replace("admin_p_archive_", ""))
     practice = await session.get(Practice, practice_id)
     if not practice:
         await callback.answer("Не знайдено", show_alert=True)
         return
 
-    # Підрахуємо що видалиться
+    practice.is_archived = True
+    practice.is_active = False  # щоб точно не показувалась
+    await session.commit()
+
+    await callback.answer(f"📦 Архівовано: {practice.title}", show_alert=True)
+    callback.data = "admin_practices"
+    await cb_admin_practices(callback, session)
+
+
+# ───────── Архів ─────────
+
+@router.callback_query(F.data == "admin_archive")
+async def cb_admin_archive_list(callback: CallbackQuery, session: AsyncSession):
+    """Список архівних практик."""
+    result = await session.execute(
+        select(Practice).where(Practice.is_archived == True).order_by(Practice.id)
+    )
+    practices = result.scalars().all()
+
+    kb = InlineKeyboardBuilder()
+    if not practices:
+        text = (
+            "📦 <b>АРХІВ</b>\n"
+            "━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Архів порожній.</i>"
+        )
+    else:
+        lines = ["📦 <b>АРХІВ ПРАКТИК</b>", "━━━━━━━━━━━━━━━━━", ""]
+        for p in practices:
+            lines.append(f"📦  <b>{p.title}</b>")
+            kb.row(InlineKeyboardButton(
+                text=f"📦  {p.title}",
+                callback_data=f"admin_arch_{p.id}",
+            ))
+        text = "\n".join(lines)
+
+    kb.row(InlineKeyboardButton(text="◀️  До списку практик", callback_data="admin_practices"))
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+def _archived_practice_kb(practice_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="♻️  Розархівувати",
+        callback_data=f"admin_unarch_{practice_id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="🗑  Видалити назавжди",
+        callback_data=f"admin_p_del_{practice_id}",
+    ))
+    kb.row(InlineKeyboardButton(text="◀️  До архіву", callback_data="admin_archive"))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data.regexp(r"^admin_arch_\d+$"))
+async def cb_admin_archived_practice(callback: CallbackQuery, session: AsyncSession):
+    practice_id = int(callback.data.replace("admin_arch_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
     sched_count = (await session.execute(
         select(func.count()).select_from(PracticeSchedule).where(
             PracticeSchedule.practice_id == practice_id
@@ -702,16 +786,66 @@ async def cb_admin_practice_delete_warn(callback: CallbackQuery, session: AsyncS
     )).scalar() or 0
 
     text = (
-        "🗑 <b>ВИДАЛЕННЯ ПРАКТИКИ</b>\n"
+        f"📦 <b>{practice.title}</b>\n"
+        "<i>в архіві</i>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"💰  <b>Ціна:</b>  {int(practice.price)} грн\n"
+        f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
+        f"📅  <b>Дат розкладу:</b>  {sched_count}\n"
+        f"📋  <b>Бронювань:</b>  {booking_count}\n\n"
+        "♻️  Розархівуйте щоб повернути практику в активні.\n"
+        "🗑  Або видаліть назавжди (з усіма бронюваннями і платежами)."
+    )
+    await callback.message.edit_text(
+        text, reply_markup=_archived_practice_kb(practice_id), parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_unarch_"))
+async def cb_admin_unarchive(callback: CallbackQuery, session: AsyncSession):
+    practice_id = int(callback.data.replace("admin_unarch_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    practice.is_archived = False
+    practice.is_active = True
+    await session.commit()
+    await callback.answer(f"♻️ Розархівовано: {practice.title}", show_alert=True)
+    callback.data = "admin_practices"
+    await cb_admin_practices(callback, session)
+
+
+@router.callback_query(F.data.startswith("admin_p_del_"))
+async def cb_admin_practice_delete_warn(callback: CallbackQuery, session: AsyncSession):
+    """Видалення з архіву — попередження + підтвердження."""
+    practice_id = int(callback.data.replace("admin_p_del_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    sched_count = (await session.execute(
+        select(func.count()).select_from(PracticeSchedule).where(
+            PracticeSchedule.practice_id == practice_id
+        )
+    )).scalar() or 0
+    booking_count = (await session.execute(
+        select(func.count()).select_from(Booking).where(
+            Booking.practice_id == practice_id
+        )
+    )).scalar() or 0
+
+    text = (
+        "🗑 <b>ВИДАЛЕННЯ НАЗАВЖДИ</b>\n"
         "━━━━━━━━━━━━━━━━━\n\n"
         f"<b>{practice.title}</b>\n\n"
-        "⚠️  Буде видалено <b>назавжди</b>:\n"
+        "⚠️  Буде видалено <b>повністю</b>:\n"
         f"• сама практика\n"
         f"• {sched_count} дат розкладу\n"
         f"• {booking_count} бронювань і повʼязаних платежів\n\n"
-        "<i>Цю дію неможливо відмінити.</i>\n\n"
-        "Якщо просто хочете прибрати її з меню клієнтів — оберіть «◀️ Скасувати» "
-        "і скористайтеся кнопкою «⚪️ Деактивувати»."
+        "<i>Цю дію неможливо відмінити.</i>"
     )
 
     kb = InlineKeyboardBuilder()
@@ -719,18 +853,14 @@ async def cb_admin_practice_delete_warn(callback: CallbackQuery, session: AsyncS
         text="✅  Так, видалити назавжди",
         callback_data=f"admin_p_delconfirm_{practice_id}",
     ))
-    kb.row(InlineKeyboardButton(
-        text="◀️  Скасувати",
-        callback_data=f"admin_p_{practice_id}",
-    ))
-
+    kb.row(InlineKeyboardButton(text="◀️  Скасувати", callback_data=f"admin_arch_{practice_id}"))
     await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_p_delconfirm_"))
 async def cb_admin_practice_delete_confirm(callback: CallbackQuery, session: AsyncSession):
-    """Реальне видалення практики з каскадом по FK."""
+    """Реальне видалення з каскадом по FK."""
     practice_id = int(callback.data.replace("admin_p_delconfirm_", ""))
     practice = await session.get(Practice, practice_id)
     if not practice:
@@ -739,13 +869,11 @@ async def cb_admin_practice_delete_confirm(callback: CallbackQuery, session: Asy
 
     title = practice.title
 
-    # Знайти усі bookings цієї практики
     bookings_result = await session.execute(
         select(Booking.id).where(Booking.practice_id == practice_id)
     )
     booking_ids = [row[0] for row in bookings_result.all()]
 
-    # Видалити повʼязані payments → bookings → schedules → practice
     if booking_ids:
         await session.execute(
             sa_delete(Payment).where(Payment.booking_id.in_(booking_ids))
@@ -761,11 +889,9 @@ async def cb_admin_practice_delete_confirm(callback: CallbackQuery, session: Asy
     )
     await session.commit()
 
-    await callback.answer(f"Видалено: {title}", show_alert=True)
-
-    # Повертаємо до списку практик
-    callback.data = "admin_practices"
-    await cb_admin_practices(callback, session)
+    await callback.answer(f"🗑 Видалено: {title}", show_alert=True)
+    callback.data = "admin_archive"
+    await cb_admin_archive_list(callback, session)
 
 
 @router.callback_query(F.data.startswith("admin_p_toggle_"))
