@@ -1,14 +1,21 @@
 """
 Адмін-панель Magic Vibes — доступна лише користувачам з ADMIN_IDS.
 """
+import asyncio
+import gzip
+import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+    BufferedInputFile,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sa_delete
@@ -49,6 +56,7 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="👥  Клієнти", callback_data="admin_clients"))
     kb.row(InlineKeyboardButton(text="💳  Платежі", callback_data="admin_payments"))
     kb.row(InlineKeyboardButton(text="📊  Статистика", callback_data="admin_stats"))
+    kb.row(InlineKeyboardButton(text="💾  Бекап БД", callback_data="admin_backup"))
     kb.row(InlineKeyboardButton(text="❌  Закрити", callback_data="admin_close"))
     return kb.as_markup()
 
@@ -91,6 +99,85 @@ async def cb_admin_menu(callback: CallbackQuery):
     except Exception:
         await callback.message.answer(ADMIN_HEADER, reply_markup=admin_main_kb(), parse_mode="HTML")
     await callback.answer()
+
+
+BACKUPS_DIR = Path("/opt/magic_vibes_bot/backups")
+
+
+@router.callback_query(F.data == "admin_backup")
+async def cb_admin_backup(callback: CallbackQuery, config):
+    """Зробити дамп БД через pg_dump, зберегти на VPS і надіслати админу .sql.gz."""
+    await callback.answer("⏳ Створюю бекап...", show_alert=False)
+
+    db = config.db
+    cmd = [
+        "pg_dump",
+        "-h", db.host,
+        "-p", str(db.port),
+        "-U", db.user,
+        "-d", db.name,
+        "--no-owner",
+        "--no-privileges",
+        "--clean",
+        "--if-exists",
+    ]
+    env = {**os.environ, "PGPASSWORD": db.password}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await proc.communicate()
+    except FileNotFoundError:
+        await callback.message.answer(
+            "❌ <b>pg_dump не знайдено</b>\n\n"
+            "Встановіть на VPS: <code>apt install -y postgresql-client</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    if proc.returncode != 0:
+        err = (stderr or b"").decode("utf-8", errors="replace")[:1500]
+        await callback.message.answer(
+            f"❌ <b>pg_dump failed</b> (rc={proc.returncode})\n\n<pre>{err}</pre>",
+            parse_mode="HTML",
+        )
+        return
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"magic_vibes_bot_{timestamp}.sql.gz"
+    compressed = gzip.compress(stdout, compresslevel=6)
+
+    # Зберігаємо локальну копію на VPS
+    try:
+        BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        local_path = BACKUPS_DIR / filename
+        local_path.write_bytes(compressed)
+        local_note = f"\n📂  Збережено на VPS:\n<code>{local_path}</code>"
+    except Exception as e:
+        local_note = f"\n⚠️  Не вдалось зберегти на VPS: {e}"
+
+    raw_kb = f"{len(stdout) / 1024:.1f}"
+    gz_kb = f"{len(compressed) / 1024:.1f}"
+
+    caption = (
+        "💾 <b>Бекап БД Magic Vibes</b>\n"
+        f"🕒  {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+        f"📦  SQL: {raw_kb} КБ → стиснуто: {gz_kb} КБ"
+        f"{local_note}\n\n"
+        "<i>Збережіть файл локально — це повний дамп бази,\n"
+        "який можна відновити через psql.</i>"
+    )
+
+    await callback.bot.send_document(
+        chat_id=callback.from_user.id,
+        document=BufferedInputFile(compressed, filename=filename),
+        caption=caption,
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "admin_close")
