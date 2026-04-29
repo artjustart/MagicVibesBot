@@ -26,7 +26,7 @@ def get_main_menu() -> InlineKeyboardMarkup:
         callback_data="three_month_course"
     ))
     builder.row(InlineKeyboardButton(
-        text="📍  Локація",
+        text="📍  Як нас знайти",
         callback_data="locations"
     ))
     builder.row(InlineKeyboardButton(

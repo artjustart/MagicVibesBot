@@ -161,8 +161,8 @@ def _practice_info_kb(practice: Practice) -> "InlineKeyboardBuilder":
         callback_data=f"ppolicy_{practice.id}",
     ))
     kb.row(InlineKeyboardButton(
-        text="🗓  Організаційна інформація",
-        callback_data=f"porg_{practice.id}",
+        text="📍  Як нас знайти",
+        callback_data=f"ploc_{practice.id}",
     ))
     kb.row(InlineKeyboardButton(
         text="📅  Обрати дату й записатися",
@@ -259,10 +259,87 @@ async def show_practice_policy(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("porg_"))
 async def show_practice_org(callback: CallbackQuery):
+    """Залишено для зворотної сумісності зі старими повідомленнями."""
     practice_id = int(callback.data.replace("porg_", ""))
     await callback.message.edit_text(
         text=ORG_INFO,
         reply_markup=_back_to_practice_kb(practice_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ploc_"))
+async def show_practice_location(callback: CallbackQuery, session: AsyncSession):
+    """Як нас знайти — конкретна локація прив'язана до практики (або список усіх)."""
+    from database.models import Location  # local import to avoid cycle on top
+    practice_id = int(callback.data.replace("ploc_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Практику не знайдено", show_alert=True)
+        return
+
+    location = None
+    if practice.location_id:
+        location = await session.get(Location, practice.location_id)
+
+    bot = callback.bot
+    chat_id = callback.from_user.id
+
+    # Якщо є локація — показуємо її як в розділі "Як нас знайти"
+    if location and location.is_active:
+        text = (
+            f"📍 <b>{location.title}</b>\n"
+            "━━━━━━━━━━━━━━━━━\n\n"
+            f"🏠  <b>Адреса:</b>\n{location.address}"
+        )
+
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="🗺  Відкрити в Google Maps", url=location.maps_url))
+        kb.row(InlineKeyboardButton(
+            text="◀️  До картки практики",
+            callback_data=f"practice_{practice_id}",
+        ))
+
+        # Видаляємо поточне текстове повідомлення — далі шлемо відео або текст
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        if location.video_file_id:
+            try:
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=location.video_file_id,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=kb.as_markup(),
+                )
+                await callback.answer()
+                return
+            except Exception:
+                pass
+
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text + "\n\n<i>📹 Відео-інструкція ще не завантажена.</i>",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    # Якщо локація не прив'язана — направляємо у загальний список
+    await callback.message.edit_text(
+        "📍 <b>Як нас знайти</b>\n\n"
+        "<i>Конкретна локація для цієї практики ще не вказана.</i>\n"
+        "Перегляньте всі локації Magic Vibes:",
+        reply_markup=InlineKeyboardBuilder()
+            .row(InlineKeyboardButton(text="📍  Усі локації", callback_data="locations"))
+            .row(InlineKeyboardButton(text="◀️  До картки практики", callback_data=f"practice_{practice_id}"))
+            .as_markup(),
         parse_mode="HTML",
     )
     await callback.answer()

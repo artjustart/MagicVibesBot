@@ -664,6 +664,7 @@ def _practice_card_kb(practice: Practice) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✏️ Тривалість", callback_data=f"admin_p_edit_{practice.id}_duration_minutes"),
     )
     kb.row(InlineKeyboardButton(text="✏️  Макс. учасників", callback_data=f"admin_p_edit_{practice.id}_max_participants"))
+    kb.row(InlineKeyboardButton(text="📍  Локація практики", callback_data=f"admin_p_loc_{practice.id}"))
     toggle = "⚪️ Деактивувати" if practice.is_active else "🟢 Активувати"
     kb.row(InlineKeyboardButton(text=toggle, callback_data=f"admin_p_toggle_{practice.id}"))
     kb.row(InlineKeyboardButton(text="📦  Архівувати", callback_data=f"admin_p_archive_{practice.id}"))
@@ -671,11 +672,12 @@ def _practice_card_kb(practice: Practice) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def _format_practice_card(practice: Practice) -> str:
+def _format_practice_card(practice: Practice, location: Optional[Location] = None) -> str:
     state = "🟢 активна" if practice.is_active else "⚪️ неактивна"
     desc_preview = (practice.description or "")[:200]
     if len(practice.description or "") > 200:
         desc_preview += "..."
+    loc_line = f"📍  <b>Локація:</b>  {location.title}" if location else "📍  <b>Локація:</b>  <i>не вказана</i>"
     return (
         f"🪷 <b>{practice.title}</b>  ({state})\n"
         "━━━━━━━━━━━━━━━━━\n\n"
@@ -683,6 +685,7 @@ def _format_practice_card(practice: Practice) -> str:
         f"💰  <b>Ціна:</b>  {int(practice.price)} грн\n"
         f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
         f"👥  <b>Макс. учасників:</b>  {practice.max_participants or '—'}\n"
+        f"{loc_line}\n"
         f"🏷  <b>Тип:</b>  {practice.practice_type.value}"
     )
 
@@ -694,8 +697,9 @@ async def cb_admin_practice_card(callback: CallbackQuery, session: AsyncSession)
     if not practice:
         await callback.answer("Не знайдено", show_alert=True)
         return
+    location = await session.get(Location, practice.location_id) if practice.location_id else None
     await callback.message.edit_text(
-        _format_practice_card(practice),
+        _format_practice_card(practice, location),
         reply_markup=_practice_card_kb(practice),
         parse_mode="HTML",
     )
@@ -892,6 +896,75 @@ async def cb_admin_practice_delete_confirm(callback: CallbackQuery, session: Asy
     await callback.answer(f"🗑 Видалено: {title}", show_alert=True)
     callback.data = "admin_archive"
     await cb_admin_archive_list(callback, session)
+
+
+@router.callback_query(F.data.startswith("admin_p_loc_"))
+async def cb_admin_practice_location_pick(callback: CallbackQuery, session: AsyncSession):
+    """Показати список активних локацій для привʼязки до практики."""
+    practice_id = int(callback.data.replace("admin_p_loc_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    locations_result = await session.execute(
+        select(Location).where(Location.is_active == True)
+        .order_by(Location.sort_order, Location.id)
+    )
+    locations = locations_result.scalars().all()
+
+    kb = InlineKeyboardBuilder()
+    for loc in locations:
+        mark = "✅ " if practice.location_id == loc.id else ""
+        kb.row(InlineKeyboardButton(
+            text=f"{mark}📍  {loc.title}",
+            callback_data=f"admin_p_setloc_{practice_id}_{loc.id}",
+        ))
+    if practice.location_id:
+        kb.row(InlineKeyboardButton(
+            text="🚫  Зняти привʼязку",
+            callback_data=f"admin_p_setloc_{practice_id}_0",
+        ))
+    kb.row(InlineKeyboardButton(text="◀️  Назад", callback_data=f"admin_p_{practice_id}"))
+
+    text = (
+        f"📍 <b>Локація для:</b>  {practice.title}\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Оберіть локацію — її буде показано клієнтам по кнопці\n"
+        "<b>«📍 Як нас знайти»</b> у картці практики."
+    )
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_p_setloc_"))
+async def cb_admin_practice_set_location(callback: CallbackQuery, session: AsyncSession):
+    """admin_p_setloc_<practice_id>_<location_id> (location_id=0 → unset)."""
+    suffix = callback.data.replace("admin_p_setloc_", "")
+    try:
+        practice_id_s, location_id_s = suffix.rsplit("_", 1)
+        practice_id = int(practice_id_s)
+        location_id = int(location_id_s)
+    except Exception:
+        await callback.answer("Невірна команда", show_alert=True)
+        return
+
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    practice.location_id = location_id if location_id > 0 else None
+    await session.commit()
+
+    if location_id > 0:
+        loc = await session.get(Location, location_id)
+        await callback.answer(f"📍 {loc.title if loc else 'OK'}")
+    else:
+        await callback.answer("🚫 Привʼязку знято")
+
+    callback.data = f"admin_p_{practice_id}"
+    await cb_admin_practice_card(callback, session)
 
 
 @router.callback_query(F.data.startswith("admin_p_toggle_"))

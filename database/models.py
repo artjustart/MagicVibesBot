@@ -65,6 +65,9 @@ class Practice(Base):
     max_participants: Mapped[Optional[int]] = mapped_column(Integer)  # Только для групповых
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    location_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("locations.id"), nullable=True
+    )
     
     # Relationships
     schedules: Mapped[list["PracticeSchedule"]] = relationship(back_populates="practice")

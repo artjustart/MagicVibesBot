@@ -86,6 +86,9 @@ async def main():
         await conn.execute(sql_text(
             "ALTER TABLE practices ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE"
         ))
+        await conn.execute(sql_text(
+            "ALTER TABLE practices ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES locations(id)"
+        ))
     
     # Создаем фабрику сессий
     session_maker = async_sessionmaker(
