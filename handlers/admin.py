@@ -11,7 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete as sa_delete
 
 import json
 
@@ -644,6 +644,7 @@ def _practice_card_kb(practice: Practice) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="✏️  Макс. учасників", callback_data=f"admin_p_edit_{practice.id}_max_participants"))
     toggle = "⚪️ Деактивувати" if practice.is_active else "🟢 Активувати"
     kb.row(InlineKeyboardButton(text=toggle, callback_data=f"admin_p_toggle_{practice.id}"))
+    kb.row(InlineKeyboardButton(text="🗑  Видалити практику", callback_data=f"admin_p_del_{practice.id}"))
     kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_practices"))
     return kb.as_markup()
 
@@ -677,6 +678,94 @@ async def cb_admin_practice_card(callback: CallbackQuery, session: AsyncSession)
         parse_mode="HTML",
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_p_del_"))
+async def cb_admin_practice_delete_warn(callback: CallbackQuery, session: AsyncSession):
+    """Перший крок — попередження + підтвердження."""
+    practice_id = int(callback.data.replace("admin_p_del_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    # Підрахуємо що видалиться
+    sched_count = (await session.execute(
+        select(func.count()).select_from(PracticeSchedule).where(
+            PracticeSchedule.practice_id == practice_id
+        )
+    )).scalar() or 0
+    booking_count = (await session.execute(
+        select(func.count()).select_from(Booking).where(
+            Booking.practice_id == practice_id
+        )
+    )).scalar() or 0
+
+    text = (
+        "🗑 <b>ВИДАЛЕННЯ ПРАКТИКИ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>{practice.title}</b>\n\n"
+        "⚠️  Буде видалено <b>назавжди</b>:\n"
+        f"• сама практика\n"
+        f"• {sched_count} дат розкладу\n"
+        f"• {booking_count} бронювань і повʼязаних платежів\n\n"
+        "<i>Цю дію неможливо відмінити.</i>\n\n"
+        "Якщо просто хочете прибрати її з меню клієнтів — оберіть «◀️ Скасувати» "
+        "і скористайтеся кнопкою «⚪️ Деактивувати»."
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="✅  Так, видалити назавжди",
+        callback_data=f"admin_p_delconfirm_{practice_id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="◀️  Скасувати",
+        callback_data=f"admin_p_{practice_id}",
+    ))
+
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_p_delconfirm_"))
+async def cb_admin_practice_delete_confirm(callback: CallbackQuery, session: AsyncSession):
+    """Реальне видалення практики з каскадом по FK."""
+    practice_id = int(callback.data.replace("admin_p_delconfirm_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    title = practice.title
+
+    # Знайти усі bookings цієї практики
+    bookings_result = await session.execute(
+        select(Booking.id).where(Booking.practice_id == practice_id)
+    )
+    booking_ids = [row[0] for row in bookings_result.all()]
+
+    # Видалити повʼязані payments → bookings → schedules → practice
+    if booking_ids:
+        await session.execute(
+            sa_delete(Payment).where(Payment.booking_id.in_(booking_ids))
+        )
+        await session.execute(
+            sa_delete(Booking).where(Booking.id.in_(booking_ids))
+        )
+    await session.execute(
+        sa_delete(PracticeSchedule).where(PracticeSchedule.practice_id == practice_id)
+    )
+    await session.execute(
+        sa_delete(Practice).where(Practice.id == practice_id)
+    )
+    await session.commit()
+
+    await callback.answer(f"Видалено: {title}", show_alert=True)
+
+    # Повертаємо до списку практик
+    callback.data = "admin_practices"
+    await cb_admin_practices(callback, session)
 
 
 @router.callback_query(F.data.startswith("admin_p_toggle_"))
