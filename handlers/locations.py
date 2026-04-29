@@ -90,8 +90,7 @@ async def show_location(callback: CallbackQuery, session: AsyncSession):
     text = (
         f"📍 <b>{loc.title}</b>\n"
         "━━━━━━━━━━━━━━━━━\n\n"
-        f"🏠  <b>Адреса:</b>\n{loc.address}\n\n"
-        f"🗺  Карта: <a href='{loc.maps_url}'>відкрити в Google Maps</a>"
+        f"🏠  <b>Адреса:</b>\n{loc.address}"
     )
 
     # Видаляємо попереднє повідомлення меню локацій (щоб відео+картка були єдиним блоком)
