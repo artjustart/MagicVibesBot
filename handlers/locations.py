@@ -34,6 +34,26 @@ def _location_detail_kb(loc: Location) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+async def _send_or_edit(callback: CallbackQuery, text: str, reply_markup):
+    """Якщо попереднє повідомлення — відео (з підписом), edit_text недоступний.
+    Тоді видаляємо його й шлемо нове."""
+    try:
+        await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
+        return
+    except Exception:
+        pass
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
+
+
 @router.callback_query(F.data == "locations")
 async def show_locations(callback: CallbackQuery, session: AsyncSession):
     result = await session.execute(
@@ -42,14 +62,10 @@ async def show_locations(callback: CallbackQuery, session: AsyncSession):
     locations = result.scalars().all()
 
     if not locations:
-        text = (
-            "📍 <b>Локації</b>\n\n"
-            "<i>Список локацій ще не налаштовано.</i>"
-        )
-        await callback.message.edit_text(
-            text=text,
-            reply_markup=get_back_to_main_menu(),
-            parse_mode="HTML",
+        await _send_or_edit(
+            callback,
+            "📍 <b>Локації</b>\n\n<i>Список локацій ще не налаштовано.</i>",
+            get_back_to_main_menu(),
         )
         await callback.answer()
         return
@@ -59,11 +75,7 @@ async def show_locations(callback: CallbackQuery, session: AsyncSession):
         "━━━━━━━━━━━━━━━━━\n\n"
         "Оберіть локацію — подивіться адресу, карту та відео-інструкцію 👇"
     )
-    await callback.message.edit_text(
-        text=text,
-        reply_markup=_locations_kb(locations),
-        parse_mode="HTML",
-    )
+    await _send_or_edit(callback, text, _locations_kb(locations))
     await callback.answer()
 
 

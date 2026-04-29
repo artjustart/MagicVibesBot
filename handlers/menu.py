@@ -73,13 +73,21 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_main_menu(),
             parse_mode="HTML",
         )
+        await callback.answer()
+        return
     except Exception:
-        # Якщо edit неможливий (повідомлення з фото/відео) — надсилаємо нове
-        await callback.message.answer(
-            text=WELCOME_TEXT,
-            reply_markup=get_main_menu(),
-            parse_mode="HTML",
-        )
+        pass
+    # Якщо edit неможливий (повідомлення з фото/відео) — видаляємо й шлемо нове
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=WELCOME_TEXT,
+        reply_markup=get_main_menu(),
+        parse_mode="HTML",
+    )
     await callback.answer()
 
 
