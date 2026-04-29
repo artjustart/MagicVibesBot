@@ -40,10 +40,10 @@ async def on_startup(bot: Bot, config):
     ]
     await bot.set_my_commands(commands=user_commands, scope=BotCommandScopeDefault())
 
-    # Розширений набір для адмінів (видно лише їм)
+    # Розширений набір для адмінів (видно лише їм).
+    # /backup — навмисно прихована команда (працює, але не показується в меню підказок).
     admin_commands = user_commands + [
         BotCommand(command="admin", description="🛠 Адмін-панель"),
-        BotCommand(command="backup", description="💾 Бекап БД"),
     ]
     for admin_id in config.tg_bot.admin_ids:
         try:
