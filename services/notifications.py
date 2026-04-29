@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
     Booking, Practice, PracticeSchedule, User, Payment,
-    CourseEnrollment, Course,
+    CourseEnrollment, Course, ClosedFormatRequest, Questionnaire,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,3 +179,73 @@ async def notify_payment_success(bot: Bot, admin_ids: list[int], session: AsyncS
         f"{_client_block(user)}"
     )
     await _send_to_admins(bot, admin_ids, text)
+
+
+async def notify_new_closed_format_request(
+    bot: Bot, admin_ids: list[int], session: AsyncSession, request_id: int,
+):
+    """Нова заявка на закритий формат."""
+    request = await session.get(ClosedFormatRequest, request_id)
+    if not request:
+        return
+    user = await session.get(User, request.user_id)
+    if not user:
+        return
+
+    notes_block = f"\n\n📝  <b>Коментар:</b>\n<i>{request.notes}</i>" if request.notes else ""
+    phone_block = f"\n📞  <b>Телефон:</b>  {request.contact_phone}" if request.contact_phone else ""
+
+    text = (
+        "🐘 <b>НОВА ЗАЯВКА — ЗАКРИТИЙ ФОРМАТ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"📅  <b>Бажана дата:</b>  {request.requested_date_text}\n"
+        f"👥  <b>Розмір групи:</b>  {request.group_size}{phone_block}\n\n"
+        f"{_client_block(user)}"
+        f"{notes_block}\n\n"
+        f"/closed_{request.id} — відкрити заявку"
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="🔁  Змінити статус",
+        callback_data=f"admin_closed_open_{request.id}",
+    ))
+    if user.telegram_id:
+        kb.row(InlineKeyboardButton(
+            text="💬  Написати клієнту",
+            url=f"tg://user?id={user.telegram_id}",
+        ))
+
+    await _send_to_admins(bot, admin_ids, text, kb.as_markup())
+
+
+async def notify_anketa_filled(
+    bot: Bot, admin_ids: list[int], session: AsyncSession, questionnaire_id: int,
+):
+    """Клієнт заповнив анкету учасника."""
+    q = await session.get(Questionnaire, questionnaire_id)
+    if not q:
+        return
+    user = await session.get(User, q.user_id)
+    if not user:
+        return
+
+    text = (
+        "📝 <b>АНКЕТА ЗАПОВНЕНА</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"{_client_block(user)}\n\n"
+        f"/anketa_{q.id} — переглянути всі відповіді"
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="👀  Подивитись відповіді",
+        callback_data=f"admin_anketa_{q.id}",
+    ))
+    if user.telegram_id:
+        kb.row(InlineKeyboardButton(
+            text="💬  Написати клієнту",
+            url=f"tg://user?id={user.telegram_id}",
+        ))
+
+    await _send_to_admins(bot, admin_ids, text, kb.as_markup())

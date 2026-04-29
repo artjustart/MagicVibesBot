@@ -22,6 +22,8 @@ from keyboards.inline import (
 )
 from services.requisites import format_requisites, format_purpose_for_booking
 from services.notifications import notify_new_booking
+from content.texts import WHAT_TO_BRING, CANCELLATION_POLICY, ORG_INFO
+from datetime import timedelta
 
 router = Router()
 
@@ -141,10 +143,134 @@ async def show_practices_list(callback: CallbackQuery, session: AsyncSession):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("practice_"))
-async def show_practice_schedule(callback: CallbackQuery, session: AsyncSession):
-    """Розклад конкретної практики"""
+def _practice_info_kb(practice: Practice) -> "InlineKeyboardBuilder":
+    """Інфо-екран картки практики з сабменю."""
+    kb = InlineKeyboardBuilder()
+    if practice.details:
+        kb.row(InlineKeyboardButton(
+            text="📖  Детальніше про практику",
+            callback_data=f"pdetails_{practice.id}",
+        ))
+    kb.row(InlineKeyboardButton(
+        text="🎒  Що взяти з собою",
+        callback_data=f"pbring_{practice.id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="❗  Умови скасування",
+        callback_data=f"ppolicy_{practice.id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="🗓  Організаційна інформація",
+        callback_data=f"porg_{practice.id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="📅  Обрати дату й записатися",
+        callback_data=f"pickdate_{practice.id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="◀️  До списку практик",
+        callback_data="practices_list",
+    ))
+    return kb.as_markup()
+
+
+def _back_to_practice_kb(practice_id: int) -> "InlineKeyboardMarkup":
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="◀️  До картки практики",
+        callback_data=f"practice_{practice_id}",
+    ))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data.regexp(r"^practice_\d+$"))
+async def show_practice_info(callback: CallbackQuery, session: AsyncSession):
+    """Інфо-екран картки практики (короткий опис + сабменю)."""
     practice_id = int(callback.data.replace("practice_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice:
+        await callback.answer("Практику не знайдено", show_alert=True)
+        return
+
+    text = (
+        f"🪷  <b>{practice.title}</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"{practice.description}\n\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
+        f"💰  <b>Вартість:</b>  {int(practice.price)} грн\n\n"
+        "👇 Що цікавить?"
+    )
+
+    try:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=_practice_info_kb(practice),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text=text,
+            reply_markup=_practice_info_kb(practice),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pdetails_"))
+async def show_practice_details(callback: CallbackQuery, session: AsyncSession):
+    """Довгий опис практики (з БД-поля Practice.details)."""
+    practice_id = int(callback.data.replace("pdetails_", ""))
+    practice = await session.get(Practice, practice_id)
+    if not practice or not practice.details:
+        await callback.answer("Деталей ще немає", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        text=practice.details,
+        reply_markup=_back_to_practice_kb(practice_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pbring_"))
+async def show_practice_what_to_bring(callback: CallbackQuery):
+    practice_id = int(callback.data.replace("pbring_", ""))
+    await callback.message.edit_text(
+        text=WHAT_TO_BRING,
+        reply_markup=_back_to_practice_kb(practice_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ppolicy_"))
+async def show_practice_policy(callback: CallbackQuery):
+    practice_id = int(callback.data.replace("ppolicy_", ""))
+    await callback.message.edit_text(
+        text=CANCELLATION_POLICY,
+        reply_markup=_back_to_practice_kb(practice_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("porg_"))
+async def show_practice_org(callback: CallbackQuery):
+    practice_id = int(callback.data.replace("porg_", ""))
+    await callback.message.edit_text(
+        text=ORG_INFO,
+        reply_markup=_back_to_practice_kb(practice_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pickdate_"))
+async def show_practice_schedule(callback: CallbackQuery, session: AsyncSession):
+    """Розклад конкретної практики — вибір дати."""
+    practice_id = int(callback.data.replace("pickdate_", ""))
     practice = await session.get(Practice, practice_id)
 
     if not practice:
@@ -162,31 +288,38 @@ async def show_practice_schedule(callback: CallbackQuery, session: AsyncSession)
     schedules = result.scalars().all()
 
     if schedules:
-        text = f"""
-{practice.description}
-
-━━━━━━━━━━━━━━━━━
-⏱  <b>Тривалість:</b> {practice.duration_minutes} хв
-💰  <b>Вартість:</b> {int(practice.price)} грн
-
-📅 <b>Оберіть зручну дату:</b>
-"""
+        text = (
+            f"🪷  <b>{practice.title}</b>\n"
+            "━━━━━━━━━━━━━━━━━\n\n"
+            f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
+            f"💰  <b>Вартість:</b>  {int(practice.price)} грн\n\n"
+            "📅 <b>Оберіть зручну дату:</b>"
+        )
+        # Власна клавіатура з кнопкою «До картки практики»
+        kb = InlineKeyboardBuilder()
+        for s in schedules:
+            kb.row(InlineKeyboardButton(
+                text=f"📅  {s.datetime.strftime('%d.%m  •  %H:%M')}  •  залишилось {s.available_slots}",
+                callback_data=f"book_{s.id}",
+            ))
+        kb.row(InlineKeyboardButton(
+            text="◀️  До картки практики",
+            callback_data=f"practice_{practice_id}",
+        ))
         await callback.message.edit_text(
             text=text,
-            reply_markup=get_practice_schedule_keyboard(schedules, practice_id),
+            reply_markup=kb.as_markup(),
             parse_mode="HTML",
         )
     else:
-        text = f"""
-{practice.description}
-
-━━━━━━━━━━━━━━━━━
-На жаль, зараз немає доступних дат.
-Звʼяжіться з менеджером, щоб уточнити розклад.
-"""
+        text = (
+            f"🪷  <b>{practice.title}</b>\n\n"
+            "На жаль, зараз немає доступних дат.\n"
+            "Звʼяжіться з менеджером, щоб уточнити розклад."
+        )
         await callback.message.edit_text(
             text=text,
-            reply_markup=get_back_to_main_menu(),
+            reply_markup=_back_to_practice_kb(practice_id),
             parse_mode="HTML",
         )
 
@@ -426,31 +559,79 @@ async def proof_collect(message: Message, state: FSMContext, session: AsyncSessi
     )
 
 
-@router.callback_query(F.data.startswith("cancel_booking_"))
-async def cancel_booking(callback: CallbackQuery, session: AsyncSession):
-    """Скасування бронювання"""
+@router.callback_query(F.data.regexp(r"^cancel_booking_\d+$"))
+async def cancel_booking_warn(callback: CallbackQuery, session: AsyncSession):
+    """Перший крок скасування — попередження з умовами + підтвердження."""
     booking_id = int(callback.data.replace("cancel_booking_", ""))
     booking = await session.get(Booking, booking_id)
+    if not booking:
+        await callback.answer("Бронювання не знайдено", show_alert=True)
+        return
 
-    if booking:
-        schedule = await session.get(PracticeSchedule, booking.schedule_id)
+    practice = await session.get(Practice, booking.practice_id)
+    schedule = await session.get(PracticeSchedule, booking.schedule_id)
+
+    # Якщо менш ніж за 48 годин до практики — додаємо попередження
+    late_warning = ""
+    if schedule and schedule.datetime - datetime.utcnow() < timedelta(hours=48):
+        late_warning = (
+            "\n\n⚠️ <b>УВАГА:</b> до практики залишилось менш ніж 2 дні.\n"
+            "За правилами скасування у цьому випадку <b>50% передоплати утримується</b> "
+            "як компенсація за заброньоване місце і не повертається."
+        )
+
+    date_str = schedule.datetime.strftime("%d.%m.%Y о %H:%M") if schedule else "—"
+    text = (
+        "❌ <b>СКАСУВАННЯ БРОНЮВАННЯ</b>\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"🪷  <b>{practice.title if practice else '?'}</b>\n"
+        f"📅  {date_str}\n"
+        f"💰  {int(practice.price) if practice else 0} грн"
+        f"{late_warning}\n\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        f"{CANCELLATION_POLICY.strip()}\n\n"
+        "Ви впевнені, що хочете скасувати бронювання?"
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="✅  Так, скасувати",
+        callback_data=f"cancelconfirm_{booking_id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="◀️  Ні, повернутися",
+        callback_data="main_menu",
+    ))
+
+    await callback.message.edit_text(
+        text=text,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancelconfirm_"))
+async def cancel_booking_confirm(callback: CallbackQuery, session: AsyncSession):
+    """Реальне скасування після підтвердження."""
+    booking_id = int(callback.data.replace("cancelconfirm_", ""))
+    booking = await session.get(Booking, booking_id)
+    if not booking:
+        await callback.answer("Бронювання не знайдено", show_alert=True)
+        return
+
+    schedule = await session.get(PracticeSchedule, booking.schedule_id)
+    if schedule and booking.status != BookingStatus.CANCELLED:
         schedule.available_slots += 1
         schedule.is_available = True
 
-        booking.status = BookingStatus.CANCELLED
-        await session.commit()
+    booking.status = BookingStatus.CANCELLED
+    await session.commit()
 
-        text = """
-❌ <b>Бронювання скасовано</b>
-
-Ви можете обрати іншу практику або інший час.
-"""
-
-        await callback.message.edit_text(
-            text=text,
-            reply_markup=get_back_to_main_menu(),
-            parse_mode="HTML",
-        )
-        await callback.answer("Бронювання скасовано")
-    else:
-        await callback.answer("Бронювання не знайдено", show_alert=True)
+    await callback.message.edit_text(
+        "❌ <b>Бронювання скасовано</b>\n\n"
+        "Ви можете обрати іншу практику або інший час.",
+        reply_markup=get_back_to_main_menu(),
+        parse_mode="HTML",
+    )
+    await callback.answer("Бронювання скасовано")

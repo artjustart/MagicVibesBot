@@ -10,35 +10,39 @@ def get_main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     builder.row(InlineKeyboardButton(
-        text="🪷  Актуальні практики",
+        text="🪷  Групові практики",
         callback_data="practices_list"
     ))
     builder.row(InlineKeyboardButton(
-        text="🧘‍♀️  Індивідуальна сесія",
+        text="🐘  Закритий формат для груп",
+        callback_data="closed_format"
+    ))
+    builder.row(InlineKeyboardButton(
+        text="🧘‍♀️  Індивідуальна практика",
         callback_data="individual_session"
     ))
     builder.row(InlineKeyboardButton(
-        text="🌟  Стартовий онлайн-курс",
-        callback_data="starter_course"
-    ))
-    builder.row(InlineKeyboardButton(
-        text="📚  Навчання 3 місяці",
+        text="🌀  Тримісячний курс",
         callback_data="three_month_course"
     ))
     builder.row(InlineKeyboardButton(
-        text="📍  Як дістатися до локацій",
+        text="📍  Локація",
         callback_data="locations"
+    ))
+    builder.row(InlineKeyboardButton(
+        text="📝  Анкета учасника",
+        callback_data="start_questionnaire"
     ))
     builder.row(InlineKeyboardButton(
         text="💳  Сплатити за реквізитами",
         callback_data="pay_by_requisites"
     ))
     builder.row(InlineKeyboardButton(
-        text="🎧  Інструменти та матеріали",
+        text="🎧  Інструменти для саунд-хілінгу",
         callback_data="tools"
     ))
     builder.row(InlineKeyboardButton(
-        text="💬  Зв'язатися з менеджером",
+        text="💬  Питання адміністратору",
         callback_data="contact_manager"
     ))
 

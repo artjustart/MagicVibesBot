@@ -54,10 +54,11 @@ class User(Base):
 
 class Practice(Base):
     __tablename__ = "practices"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # довгий опис ("Детальніше")
     practice_type: Mapped[PracticeType] = mapped_column(Enum(PracticeType))
     duration_minutes: Mapped[int] = mapped_column(Integer)
     price: Mapped[float] = mapped_column(Float)
@@ -182,3 +183,39 @@ class Location(Base):
     video_file_id: Mapped[Optional[str]] = mapped_column(String(255))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ClosedFormatStatus(enum.Enum):
+    NEW = "new"             # тільки створено
+    ACCEPTED = "accepted"   # дата погоджена
+    PAID = "paid"           # передоплата отримана
+    COMPLETED = "completed" # практика проведена
+    CANCELLED = "cancelled" # скасовано
+
+
+class ClosedFormatRequest(Base):
+    __tablename__ = "closed_format_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    requested_date_text: Mapped[str] = mapped_column(String(500))
+    group_size: Mapped[int] = mapped_column(Integer)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[ClosedFormatStatus] = mapped_column(
+        Enum(ClosedFormatStatus), default=ClosedFormatStatus.NEW
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Questionnaire(Base):
+    """Анкета учасника — JSON у полі data, ключі відповідають ANKETA_QUESTIONS[*]['key']."""
+    __tablename__ = "questionnaires"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    data: Mapped[str] = mapped_column(Text)  # JSON-encoded answers
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

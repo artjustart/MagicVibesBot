@@ -2,6 +2,8 @@
 Адмін-панель Magic Vibes — доступна лише користувачам з ADMIN_IDS.
 """
 from datetime import datetime, timedelta
+from typing import Optional
+
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, BaseFilter
 from aiogram.fsm.context import FSMContext
@@ -11,11 +13,14 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
+import json
+
 from database.models import (
     Booking, Practice, PracticeSchedule, User, Payment,
     BookingStatus, PaymentStatus, PracticeType, CourseEnrollment, Course,
-    Location,
+    Location, ClosedFormatRequest, ClosedFormatStatus, Questionnaire,
 )
+from content.texts import ANKETA_QUESTIONS
 
 
 class IsAdmin(BaseFilter):
@@ -38,6 +43,8 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="📋  Заявки сьогодні", callback_data="admin_today"))
     kb.row(InlineKeyboardButton(text="📅  Найближчі практики", callback_data="admin_upcoming"))
     kb.row(InlineKeyboardButton(text="🪷  Керування практиками", callback_data="admin_practices"))
+    kb.row(InlineKeyboardButton(text="🐘  Закриті заявки", callback_data="admin_closed"))
+    kb.row(InlineKeyboardButton(text="📝  Анкети", callback_data="admin_anketas"))
     kb.row(InlineKeyboardButton(text="📍  Локації та відео", callback_data="admin_locations"))
     kb.row(InlineKeyboardButton(text="👥  Клієнти", callback_data="admin_clients"))
     kb.row(InlineKeyboardButton(text="💳  Платежі", callback_data="admin_payments"))
@@ -626,6 +633,10 @@ def _practice_card_kb(practice: Practice) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✏️ Назва", callback_data=f"admin_p_edit_{practice.id}_title"),
         InlineKeyboardButton(text="✏️ Опис", callback_data=f"admin_p_edit_{practice.id}_description"),
     )
+    kb.row(InlineKeyboardButton(
+        text="✏️  Деталі (довгий опис «Детальніше»)",
+        callback_data=f"admin_p_edit_{practice.id}_details",
+    ))
     kb.row(
         InlineKeyboardButton(text="✏️ Ціна", callback_data=f"admin_p_edit_{practice.id}_price"),
         InlineKeyboardButton(text="✏️ Тривалість", callback_data=f"admin_p_edit_{practice.id}_duration_minutes"),
@@ -807,7 +818,7 @@ async def admin_addsched_apply(message: Message, state: FSMContext, session: Asy
 
 # ── Редагування поля практики (одне поле через FSM)
 
-@router.callback_query(F.data.regexp(r"^admin_p_edit_\d+_(title|description|price|duration_minutes|max_participants)$"))
+@router.callback_query(F.data.regexp(r"^admin_p_edit_\d+_(title|description|details|price|duration_minutes|max_participants)$"))
 async def cb_admin_practice_edit_start(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
     practice_id = int(parts[3])
@@ -817,7 +828,11 @@ async def cb_admin_practice_edit_start(callback: CallbackQuery, state: FSMContex
 
     prompts = {
         "title": "Надішліть нову назву практики:",
-        "description": "Надішліть новий опис (можна з HTML-тегами <b>, <i>, переноси рядків):",
+        "description": "Надішліть новий короткий опис (показується у картці; можна з HTML-тегами <b>, <i>):",
+        "details": (
+            "Надішліть детальний опис практики (можна з HTML, переноси рядків).\n"
+            "Цей текст показується клієнтам по кнопці «📖 Детальніше про практику»."
+        ),
         "price": "Надішліть нову ціну в грн (число):",
         "duration_minutes": "Надішліть нову тривалість у хвилинах (число):",
         "max_participants": "Надішліть нове максимальне число учасників (число):",
@@ -1121,3 +1136,274 @@ async def admin_loc_video_save(message: Message, state: FSMContext, session: Asy
         f"✅ Відео збережено для локації <b>{loc.title}</b>",
         parse_mode="HTML",
     )
+
+
+# ────────────────────── 📝 Анкети ──────────────────────
+
+@router.callback_query(F.data == "admin_anketas")
+async def cb_admin_anketas(callback: CallbackQuery, session: AsyncSession):
+    result = await session.execute(
+        select(Questionnaire).order_by(Questionnaire.updated_at.desc()).limit(30)
+    )
+    questionnaires = result.scalars().all()
+
+    lines = ["📝 <b>АНКЕТИ УЧАСНИКІВ</b>", "━━━━━━━━━━━━━━━━━", ""]
+    kb = InlineKeyboardBuilder()
+
+    if not questionnaires:
+        lines.append("<i>Поки що ніхто не заповнив анкету.</i>")
+    else:
+        for q in questionnaires:
+            user = await session.get(User, q.user_id)
+            handle = f"@{user.username}" if user and user.username else (user.full_name if user else "?")
+            updated = q.updated_at.strftime("%d.%m %H:%M") if q.updated_at else "—"
+            lines.append(f"• {handle}  •  <i>{updated}</i>")
+            kb.row(InlineKeyboardButton(
+                text=f"📝 {handle}  •  {updated}",
+                callback_data=f"admin_anketa_{q.id}",
+            ))
+
+    kb.row(InlineKeyboardButton(text="◀️  До адмін-меню", callback_data="admin_menu"))
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+def _format_anketa(q: Questionnaire, user: User) -> str:
+    try:
+        answers = json.loads(q.data) if q.data else {}
+    except Exception:
+        answers = {}
+
+    handle = f"@{user.username}" if user and user.username else (user.full_name if user else "?")
+    lines = [
+        "📝 <b>АНКЕТА УЧАСНИКА</b>",
+        f"👤 {user.full_name if user else '?'}  •  {handle}",
+        f"<i>заповнено {q.updated_at.strftime('%d.%m.%Y %H:%M') if q.updated_at else '—'}</i>",
+        "━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    for i, qdef in enumerate(ANKETA_QUESTIONS, start=1):
+        # Беремо тільки заголовок питання (перший рядок без HTML), щоб не дублювати
+        prompt_short = qdef["prompt"].split("\n")[0]
+        # Прибираємо <b>1/12.</b> на початку для краси
+        prompt_short = prompt_short.replace(f"<b>{i}/12.</b>", "").strip()
+        ans = answers.get(qdef["key"], "—")
+        lines.append(f"<b>{i}.</b>  {prompt_short}\n   ↳  <i>{ans}</i>\n")
+
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith("admin_anketa_"))
+async def cb_admin_anketa_view(callback: CallbackQuery, session: AsyncSession):
+    anketa_id = int(callback.data.replace("admin_anketa_", ""))
+    q = await session.get(Questionnaire, anketa_id)
+    if not q:
+        await callback.answer("Анкету не знайдено", show_alert=True)
+        return
+    user = await session.get(User, q.user_id)
+
+    kb = InlineKeyboardBuilder()
+    if user and user.telegram_id:
+        kb.row(InlineKeyboardButton(
+            text="💬  Написати клієнту",
+            url=f"tg://user?id={user.telegram_id}",
+        ))
+    kb.row(InlineKeyboardButton(text="◀️  До списку анкет", callback_data="admin_anketas"))
+
+    text = _format_anketa(q, user)
+    # Telegram обрізає повідомлення до 4096 символів — урізаємо при потребі
+    if len(text) > 4000:
+        text = text[:3990] + "\n\n…"
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(F.text.regexp(r"^/anketa_\d+"))
+async def cmd_anketa(message: Message, session: AsyncSession):
+    try:
+        anketa_id = int(message.text.split("_", 1)[1].split()[0])
+    except Exception:
+        await message.answer("Невірний формат. /anketa_<id>")
+        return
+    q = await session.get(Questionnaire, anketa_id)
+    if not q:
+        await message.answer("Анкету не знайдено")
+        return
+    user = await session.get(User, q.user_id)
+    text = _format_anketa(q, user)
+    if len(text) > 4000:
+        text = text[:3990] + "\n\n…"
+    kb = InlineKeyboardBuilder()
+    if user and user.telegram_id:
+        kb.row(InlineKeyboardButton(
+            text="💬  Написати клієнту",
+            url=f"tg://user?id={user.telegram_id}",
+        ))
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+
+
+# ────────────────────── 🐘 Закриті заявки ──────────────────────
+
+CLOSED_STATUS_LABELS = {
+    ClosedFormatStatus.NEW: "🆕 Нова",
+    ClosedFormatStatus.ACCEPTED: "✅ Погоджена",
+    ClosedFormatStatus.PAID: "💰 Оплачена",
+    ClosedFormatStatus.COMPLETED: "🏁 Проведена",
+    ClosedFormatStatus.CANCELLED: "❌ Скасована",
+}
+
+CLOSED_CLIENT_MESSAGES = {
+    ClosedFormatStatus.ACCEPTED: (
+        "✅ <b>Ваш закритий формат погоджено!</b>\n\n"
+        "Зараз надішлемо реквізити для передоплати 3000 грн.\n"
+        "Чекаємо на вас 🤍"
+    ),
+    ClosedFormatStatus.PAID: (
+        "💰 <b>Дякуємо, передоплату отримано!</b>\n\nЧекаємо на вас 🪷"
+    ),
+    ClosedFormatStatus.COMPLETED: (
+        "🏁 <b>Дякуємо за зустріч!</b> 💫\n\nДо нових зустрічей у Magic Vibes 🤍"
+    ),
+    ClosedFormatStatus.CANCELLED: (
+        "❌ <b>Заявку скасовано</b>\n\nЯкщо це помилка — звʼяжіться з менеджером 💬"
+    ),
+}
+
+
+@router.callback_query(F.data == "admin_closed")
+async def cb_admin_closed_list(callback: CallbackQuery, session: AsyncSession):
+    result = await session.execute(
+        select(ClosedFormatRequest).order_by(ClosedFormatRequest.created_at.desc()).limit(20)
+    )
+    requests = result.scalars().all()
+
+    lines = ["🐘 <b>ЗАКРИТІ ЗАЯВКИ</b>", "━━━━━━━━━━━━━━━━━", ""]
+    kb = InlineKeyboardBuilder()
+
+    if not requests:
+        lines.append("<i>Заявок ще немає.</i>")
+    else:
+        for r in requests:
+            user = await session.get(User, r.user_id)
+            handle = f"@{user.username}" if user and user.username else (user.full_name if user else "?")
+            status_label = CLOSED_STATUS_LABELS.get(r.status, str(r.status))
+            created = r.created_at.strftime("%d.%m %H:%M") if r.created_at else "—"
+            lines.append(f"{status_label}  •  <b>#{r.id}</b>  •  {handle}  •  <i>{created}</i>")
+            kb.row(InlineKeyboardButton(
+                text=f"#{r.id}  {status_label}  •  {handle}",
+                callback_data=f"admin_closed_open_{r.id}",
+            ))
+
+    kb.row(InlineKeyboardButton(text="◀️  До адмін-меню", callback_data="admin_menu"))
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+def _closed_request_kb(request_id: int, user_telegram_id: Optional[int] = None) -> InlineKeyboardMarkup:
+    from aiogram.types import InlineKeyboardButton as IKB
+    kb = InlineKeyboardBuilder()
+    for status, label in CLOSED_STATUS_LABELS.items():
+        kb.row(IKB(text=label, callback_data=f"admin_closed_set_{request_id}_{status.value}"))
+    if user_telegram_id:
+        kb.row(IKB(text="💬  Написати клієнту", url=f"tg://user?id={user_telegram_id}"))
+    kb.row(IKB(text="◀️  До списку", callback_data="admin_closed"))
+    return kb.as_markup()
+
+
+def _format_closed_request(r: ClosedFormatRequest, user: User) -> str:
+    handle = f"@{user.username}" if user and user.username else (user.full_name if user else "?")
+    notes = f"\n📝  <b>Коментар:</b>  <i>{r.notes}</i>" if r.notes else ""
+    phone = f"\n📞  <b>Телефон:</b>  {r.contact_phone}" if r.contact_phone else ""
+    status_label = CLOSED_STATUS_LABELS.get(r.status, str(r.status))
+    created = r.created_at.strftime("%d.%m.%Y %H:%M") if r.created_at else "—"
+    return (
+        f"🐘 <b>Заявка #{r.id}</b>  ({status_label})\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"📅  <b>Бажана дата:</b>  {r.requested_date_text}\n"
+        f"👥  <b>Розмір групи:</b>  {r.group_size}{phone}\n\n"
+        f"👤  {user.full_name if user else '?'}  •  {handle}{notes}\n\n"
+        f"<i>Створено {created}</i>\n\n"
+        "👇 Оберіть новий статус:"
+    )
+
+
+@router.callback_query(F.data.startswith("admin_closed_open_"))
+async def cb_admin_closed_open(callback: CallbackQuery, session: AsyncSession):
+    request_id = int(callback.data.replace("admin_closed_open_", ""))
+    r = await session.get(ClosedFormatRequest, request_id)
+    if not r:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    user = await session.get(User, r.user_id)
+
+    text = _format_closed_request(r, user)
+    kb = _closed_request_kb(request_id, user.telegram_id if user else None)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(F.text.regexp(r"^/closed_\d+"))
+async def cmd_closed(message: Message, session: AsyncSession):
+    try:
+        request_id = int(message.text.split("_", 1)[1].split()[0])
+    except Exception:
+        await message.answer("Невірний формат. /closed_<id>")
+        return
+    r = await session.get(ClosedFormatRequest, request_id)
+    if not r:
+        await message.answer("Не знайдено")
+        return
+    user = await session.get(User, r.user_id)
+    await message.answer(
+        _format_closed_request(r, user),
+        reply_markup=_closed_request_kb(request_id, user.telegram_id if user else None),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("admin_closed_set_"))
+async def cb_admin_closed_set(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Зміна статусу заявки + автоповідомлення клієнту."""
+    try:
+        suffix = callback.data.replace("admin_closed_set_", "")
+        request_id_s, status_s = suffix.split("_", 1)
+        request_id = int(request_id_s)
+        new_status = ClosedFormatStatus(status_s)
+    except Exception:
+        await callback.answer("Невірна команда", show_alert=True)
+        return
+
+    r = await session.get(ClosedFormatRequest, request_id)
+    if not r:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+
+    r.status = new_status
+    await session.commit()
+
+    # Сповіщаємо клієнта
+    user = await session.get(User, r.user_id)
+    msg = CLOSED_CLIENT_MESSAGES.get(new_status)
+    if user and msg:
+        try:
+            await bot.send_message(user.telegram_id, msg, parse_mode="HTML")
+        except Exception:
+            pass
+
+    label = CLOSED_STATUS_LABELS.get(new_status, str(new_status))
+    await callback.answer(f"Статус: {label}")
+
+    text = _format_closed_request(r, user)
+    kb = _closed_request_kb(request_id, user.telegram_id if user else None)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")

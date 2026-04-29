@@ -22,6 +22,7 @@ from keyboards.inline import (
 )
 from services.requisites import format_requisites, format_purpose_for_booking
 from services.notifications import notify_new_individual_request
+from content.texts import INDIVIDUAL_DESCRIPTION
 
 router = Router()
 
@@ -43,37 +44,15 @@ async def show_individual_session_info(callback: CallbackQuery, session: AsyncSe
     practice = result.scalar_one_or_none()
 
     if practice:
-        text = f"""
-🧘‍♀️ <b>Індивідуальна сесія</b>
-
-{practice.description}
-
-━━━━━━━━━━━━━━━━━
-⏱  <b>Тривалість:</b> {practice.duration_minutes} хв
-💰  <b>Вартість:</b> {int(practice.price)} грн
-
-<b>Що входить у сесію:</b>
-• Персональна робота з практиком
-• Розробка індивідуального плану
-• Детальний зворотний звʼязок
-• Запис сесії (за бажанням)
-
-👇 Оберіть зручний час або напишіть менеджеру:
-"""
+        text = (
+            f"{INDIVIDUAL_DESCRIPTION}\n\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            f"⏱  <b>Тривалість:</b>  {practice.duration_minutes} хв\n"
+            f"💰  <b>Вартість:</b>  {int(practice.price)} грн\n\n"
+            "👇 Оберіть зручний час або напишіть менеджеру:"
+        )
     else:
-        text = """
-🧘‍♀️ <b>Індивідуальна сесія</b>
-
-Персональна робота один-на-один з практиком.
-
-<b>Що входить у сесію:</b>
-• Робота з вашими запитами
-• Індивідуальний підхід
-• Глибока проробка
-• Зворотний звʼязок
-
-Для запису звʼяжіться з менеджером.
-"""
+        text = INDIVIDUAL_DESCRIPTION
 
     await callback.message.edit_text(
         text=text,

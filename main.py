@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat, MenuButtonCommands
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from config.settings import load_config
@@ -14,7 +15,10 @@ from database.models import Base
 from services.monopay import MonoPayService
 
 # Импорт роутеров
-from handlers import menu, practices, individual, courses, admin, locations
+from handlers import (
+    menu, practices, individual, courses, admin, locations,
+    closed_format, questionnaire,
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -71,9 +75,14 @@ async def main():
         pool_pre_ping=True
     )
     
-    # Создаем таблицы
+    # Створюємо таблиці + ідемпотентні ALTER для нових колонок існуючих таблиць.
+    # Спочатку create_all (створить таблиці на свіжій інсталяції з усіма колонками),
+    # потім ALTER ADD COLUMN IF NOT EXISTS — для існуючих БД, де колонки немає.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(sql_text(
+            "ALTER TABLE practices ADD COLUMN IF NOT EXISTS details TEXT"
+        ))
     
     # Создаем фабрику сессий
     session_maker = async_sessionmaker(
@@ -112,6 +121,8 @@ async def main():
     dp.include_router(practices.router)
     dp.include_router(individual.router)
     dp.include_router(courses.router)
+    dp.include_router(closed_format.router)
+    dp.include_router(questionnaire.router)
     
     # Запускаем действия при старте
     await on_startup(bot, config)

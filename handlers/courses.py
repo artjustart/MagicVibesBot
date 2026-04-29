@@ -16,6 +16,7 @@ from keyboards.inline import (
 )
 from services.monopay import MonoPayService
 from services.notifications import notify_new_course_request
+from content.texts import THREE_MONTH_DESCRIPTION
 
 router = Router()
 
@@ -89,29 +90,12 @@ async def show_three_month_course(callback: CallbackQuery, session: AsyncSession
     course = result.scalar_one_or_none()
 
     if course:
-        text = f"""
-📚 <b>{course.title}</b>
-
-{course.description}
-
-━━━━━━━━━━━━━━━━━
-⏱  <b>Тривалість:</b> {course.duration_days} днів (3 місяці)
-💰  <b>Вартість:</b> {int(course.price)} грн
-
-<b>Програма навчання включає:</b>
-• Щотижневі живі сесії
-• Доступ до записів усіх занять
-• Індивідуальні консультації
-• Домашні завдання з перевіркою
-• Робота в групі однодумців
-• Персональний план розвитку
-• Сертифікат після завершення
-
-Це повноцінна програма для глибокої трансформації 💫
-
-━━━━━━━━━━━━━━━━━
-👇 <b>Залиште заявку</b> — наш менеджер звʼяжеться з вами найближчим часом, відповість на питання та підкаже наступні кроки.
-"""
+        text = (
+            f"{THREE_MONTH_DESCRIPTION}\n\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "👇 <b>Залиште заявку</b> — наш менеджер звʼяжеться з вами,\n"
+            "відповість на питання та підкаже наступні кроки."
+        )
 
         await callback.message.edit_text(
             text=text,

@@ -11,35 +11,9 @@ from database.models import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from content.texts import WELCOME_TEXT, HELP_TEXT, TOOLS_PLACEHOLDER
+
 router = Router()
-
-WELCOME_TEXT = """
-✨ <b>Ласкаво просимо до Magic Vibes!</b> ✨
-
-🪷 Тут ви можете:
-
-🌟  Записатися на актуальні практики
-🧘‍♀️  Забронювати індивідуальну сесію
-📚  Обрати та сплатити курс навчання
-🎧  Отримати доступ до медитацій та матеріалів
-💬  Звʼязатися з менеджером
-
-━━━━━━━━━━━━━━━━━
-👇 Оберіть потрібний розділ:
-"""
-
-HELP_TEXT = """
-ℹ️ <b>Допомога</b>
-
-Цей бот допоможе вам записатися на практики Magic Vibes 💫
-
-<b>Команди:</b>
-/start — почати спочатку
-/menu — головне меню
-/help — ця підказка
-
-Якщо щось не працює — натисніть «💬 Звʼязатися з менеджером» в меню, ми завжди раді допомогти 🤍
-"""
 
 
 async def _greet(message: Message, session: AsyncSession):
@@ -145,27 +119,19 @@ async def pay_by_requisites(callback: CallbackQuery):
 
 @router.callback_query(F.data == "tools")
 async def show_tools(callback: CallbackQuery):
-    """Розділ Інструменти"""
-    from keyboards.inline import get_tools_keyboard
-
-    text = """
-🎧 <b>Інструменти та матеріали</b>
-
-Тут ви знайдете:
-
-📖  Гайдові медитації
-🎵  Аудіо-практики для самостійної роботи
-📝  Корисні статті та матеріали
-
-━━━━━━━━━━━━━━━━━
-👇 Оберіть категорію:
-"""
-
-    await callback.message.edit_text(
-        text=text,
-        reply_markup=get_tools_keyboard(),
-        parse_mode="HTML",
-    )
+    """Розділ Інструменти для саунд-хілінгу — placeholder, поки замовник не пришле URL."""
+    try:
+        await callback.message.edit_text(
+            text=TOOLS_PLACEHOLDER,
+            reply_markup=get_back_to_main_menu(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text=TOOLS_PLACEHOLDER,
+            reply_markup=get_back_to_main_menu(),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
