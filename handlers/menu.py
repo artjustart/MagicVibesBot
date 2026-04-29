@@ -93,11 +93,53 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext):
     """Повернення до головного меню"""
     await state.clear()
 
-    await callback.message.edit_text(
-        text=WELCOME_TEXT,
-        reply_markup=get_main_menu(),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.message.edit_text(
+            text=WELCOME_TEXT,
+            reply_markup=get_main_menu(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Якщо edit неможливий (повідомлення з фото/відео) — надсилаємо нове
+        await callback.message.answer(
+            text=WELCOME_TEXT,
+            reply_markup=get_main_menu(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "pay_by_requisites")
+async def pay_by_requisites(callback: CallbackQuery):
+    """Реквізити для самостійної оплати (без привʼязки до бронювання)."""
+    from services.requisites import format_requisites, format_purpose_generic
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+
+    full_name = callback.from_user.full_name or ""
+    purpose = format_purpose_generic(full_name)
+
+    text = format_requisites(purpose)
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="📸  Я надіслав(ла) — додати квитанцію",
+        callback_data="proof_generic",
+    ))
+    kb.row(InlineKeyboardButton(text="◀️  До головного меню", callback_data="main_menu"))
+
+    try:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text=text,
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 

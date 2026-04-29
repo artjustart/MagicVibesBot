@@ -14,6 +14,7 @@ from sqlalchemy import select, func
 from database.models import (
     Booking, Practice, PracticeSchedule, User, Payment,
     BookingStatus, PaymentStatus, PracticeType, CourseEnrollment, Course,
+    Location,
 )
 
 
@@ -37,6 +38,7 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="📋  Заявки сьогодні", callback_data="admin_today"))
     kb.row(InlineKeyboardButton(text="📅  Найближчі практики", callback_data="admin_upcoming"))
     kb.row(InlineKeyboardButton(text="🪷  Керування практиками", callback_data="admin_practices"))
+    kb.row(InlineKeyboardButton(text="📍  Локації та відео", callback_data="admin_locations"))
     kb.row(InlineKeyboardButton(text="👥  Клієнти", callback_data="admin_clients"))
     kb.row(InlineKeyboardButton(text="💳  Платежі", callback_data="admin_payments"))
     kb.row(InlineKeyboardButton(text="📊  Статистика", callback_data="admin_stats"))
@@ -54,6 +56,7 @@ class AdminStates(StatesGroup):
 
     edit_field_value = State()  # очікуємо нове значення для поля
     add_schedule_datetime = State()
+    location_upload_video = State()  # очікуємо відео для локації
 
 
 def admin_back_kb() -> InlineKeyboardMarkup:
@@ -955,5 +958,166 @@ async def new_practice_max(message: Message, state: FSMContext, session: AsyncSe
     await message.answer(
         "🎉 <b>Практику створено!</b>\n\n" + _format_practice_card(practice),
         reply_markup=_practice_card_kb(practice),
+        parse_mode="HTML",
+    )
+
+
+# ────────────────────── 📍 Локації (адмін) ──────────────────────
+
+@router.callback_query(F.data == "admin_locations")
+async def cb_admin_locations(callback: CallbackQuery, session: AsyncSession):
+    result = await session.execute(
+        select(Location).order_by(Location.sort_order, Location.id)
+    )
+    locations = result.scalars().all()
+
+    kb = InlineKeyboardBuilder()
+    if not locations:
+        text = (
+            "📍 <b>ЛОКАЦІЇ</b>\n"
+            "━━━━━━━━━━━━━━━━━\n\n"
+            "<i>Локацій ще немає. Запустіть на сервері:\n"
+            "<code>venv/bin/python seed_locations.py</code></i>"
+        )
+    else:
+        lines = ["📍 <b>ЛОКАЦІЇ</b>", "━━━━━━━━━━━━━━━━━", ""]
+        for loc in locations:
+            video_mark = "🎬" if loc.video_file_id else "📹❌"
+            active_mark = "🟢" if loc.is_active else "⚪️"
+            lines.append(f"{active_mark} {video_mark}  <b>{loc.title}</b>\n   <i>{loc.address}</i>")
+            kb.row(InlineKeyboardButton(
+                text=f"{active_mark} {video_mark}  {loc.title}",
+                callback_data=f"admin_loc_{loc.id}",
+            ))
+        text = "\n".join(lines)
+
+    kb.row(InlineKeyboardButton(text="◀️  До адмін-меню", callback_data="admin_menu"))
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+def _location_admin_kb(loc: Location) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🎬  Завантажити відео", callback_data=f"admin_loc_video_{loc.id}"))
+    if loc.video_file_id:
+        kb.row(InlineKeyboardButton(text="🗑  Видалити відео", callback_data=f"admin_loc_delvideo_{loc.id}"))
+    toggle = "⚪️ Деактивувати" if loc.is_active else "🟢 Активувати"
+    kb.row(InlineKeyboardButton(text=toggle, callback_data=f"admin_loc_toggle_{loc.id}"))
+    kb.row(InlineKeyboardButton(text="◀️  До списку локацій", callback_data="admin_locations"))
+    return kb.as_markup()
+
+
+def _format_location_admin(loc: Location) -> str:
+    state = "🟢 активна" if loc.is_active else "⚪️ неактивна"
+    video = "🎬 відео завантажено" if loc.video_file_id else "📹❌ відео не завантажено"
+    return (
+        f"📍 <b>{loc.title}</b>  ({state})\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"🏠  <b>Адреса:</b>\n{loc.address}\n\n"
+        f"🗺  <b>Карта:</b>  <a href='{loc.maps_url}'>Google Maps</a>\n\n"
+        f"{video}"
+    )
+
+
+@router.callback_query(F.data.regexp(r"^admin_loc_\d+$"))
+async def cb_admin_location(callback: CallbackQuery, session: AsyncSession):
+    loc_id = int(callback.data.replace("admin_loc_", ""))
+    loc = await session.get(Location, loc_id)
+    if not loc:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    await callback.message.edit_text(
+        _format_location_admin(loc),
+        reply_markup=_location_admin_kb(loc),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_loc_toggle_"))
+async def cb_admin_location_toggle(callback: CallbackQuery, session: AsyncSession):
+    loc_id = int(callback.data.replace("admin_loc_toggle_", ""))
+    loc = await session.get(Location, loc_id)
+    if not loc:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    loc.is_active = not loc.is_active
+    await session.commit()
+    await callback.answer("Активовано" if loc.is_active else "Деактивовано")
+    await callback.message.edit_text(
+        _format_location_admin(loc),
+        reply_markup=_location_admin_kb(loc),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_loc_delvideo_"))
+async def cb_admin_location_del_video(callback: CallbackQuery, session: AsyncSession):
+    loc_id = int(callback.data.replace("admin_loc_delvideo_", ""))
+    loc = await session.get(Location, loc_id)
+    if not loc:
+        await callback.answer("Не знайдено", show_alert=True)
+        return
+    loc.video_file_id = None
+    await session.commit()
+    await callback.answer("Відео видалено")
+    await callback.message.edit_text(
+        _format_location_admin(loc),
+        reply_markup=_location_admin_kb(loc),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_loc_video_"))
+async def cb_admin_location_video_start(callback: CallbackQuery, state: FSMContext):
+    loc_id = int(callback.data.replace("admin_loc_video_", ""))
+    await state.set_state(AdminStates.location_upload_video)
+    await state.update_data(location_id=loc_id)
+    await callback.message.answer(
+        "🎬 <b>Завантаження відео для локації</b>\n\n"
+        "Надішліть відеофайл у цей чат — він буде збережений як інструкція.\n"
+        "Підтримуються відео або відео-документи (mp4).\n\n"
+        "Або /cancel для відміни.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.location_upload_video, F.text == "/cancel")
+async def admin_loc_video_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Скасовано.")
+
+
+@router.message(AdminStates.location_upload_video, F.video | F.document | F.animation)
+async def admin_loc_video_save(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    loc_id = data.get("location_id")
+    loc = await session.get(Location, loc_id)
+    if not loc:
+        await message.answer("Локацію не знайдено")
+        await state.clear()
+        return
+
+    file_id = None
+    if message.video:
+        file_id = message.video.file_id
+    elif message.animation:
+        file_id = message.animation.file_id
+    elif message.document:
+        file_id = message.document.file_id
+
+    if not file_id:
+        await message.answer("Не вдалось отримати файл. Спробуйте ще раз або /cancel.")
+        return
+
+    loc.video_file_id = file_id
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ Відео збережено для локації <b>{loc.title}</b>",
         parse_mode="HTML",
     )

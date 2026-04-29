@@ -13,12 +13,14 @@ from database.models import (
     Practice, Booking, Payment, User,
     PracticeType, BookingStatus, PaymentStatus, PracticeSchedule,
 )
+from aiogram.types import InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
 from keyboards.inline import (
     get_individual_session_keyboard,
-    get_payment_keyboard,
     get_back_to_main_menu,
 )
-from services.monopay import MonoPayService
+from services.requisites import format_requisites, format_purpose_for_booking
 from services.notifications import notify_new_individual_request
 
 router = Router()
@@ -175,7 +177,11 @@ async def process_individual_datetime(message: Message, state: FSMContext, sessi
         await state.clear()
 
         date_str = desired_datetime.strftime("%d.%m.%Y о %H:%M")
-        text = f"""
+        purpose = format_purpose_for_booking(practice.title, date_str, user.full_name or "")
+
+        # Спочатку — підтвердження запиту
+        await message.answer(
+            f"""
 ✅ <b>Запит на індивідуальну сесію створено!</b>
 
 📅  <b>Бажана дата і час:</b> {date_str}
@@ -183,13 +189,22 @@ async def process_individual_datetime(message: Message, state: FSMContext, sessi
 💰  <b>Вартість:</b> {int(practice.price)} грн
 
 ━━━━━━━━━━━━━━━━━
-Ми перевіримо доступність цього часу і звʼяжемося з вами найближчим часом.
-Після підтвердження часу менеджером ви зможете перейти до оплати.
-"""
+Ми перевіримо доступність цього часу і звʼяжемося з вами для підтвердження.
+""",
+            parse_mode="HTML",
+        )
+
+        # Потім — реквізити для оплати
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(
+            text="📸  Я сплатив(ла) — надіслати квитанцію",
+            callback_data=f"proof_booking_{booking.id}",
+        ))
+        kb.row(InlineKeyboardButton(text="◀️  До головного меню", callback_data="main_menu"))
 
         await message.answer(
-            text=text,
-            reply_markup=get_back_to_main_menu(),
+            text=format_requisites(purpose),
+            reply_markup=kb.as_markup(),
             parse_mode="HTML",
         )
 

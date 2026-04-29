@@ -2,9 +2,10 @@
 Обробники запису на групові практики
 """
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
@@ -17,17 +18,17 @@ from keyboards.inline import (
     get_practices_keyboard,
     get_practice_schedule_keyboard,
     get_booking_confirmation_keyboard,
-    get_payment_keyboard,
     get_back_to_main_menu,
 )
-from services.monopay import MonoPayService
-from services.notifications import notify_new_booking, notify_payment_success
+from services.requisites import format_requisites, format_purpose_for_booking
+from services.notifications import notify_new_booking
 
 router = Router()
 
 
 class BookingStates(StatesGroup):
     waiting_for_notes = State()
+    waiting_for_proof = State()  # очікуємо скріншот/PDF-квитанцію
 
 
 def _practice_teaser(description: str) -> str:
@@ -252,147 +253,177 @@ async def create_booking(callback: CallbackQuery, session: AsyncSession, config)
 
 
 @router.callback_query(F.data.startswith("confirm_booking_"))
-async def confirm_booking_and_pay(callback: CallbackQuery, session: AsyncSession, mono_service: MonoPayService):
-    """Підтвердження бронювання та створення платежу"""
+async def confirm_booking_and_pay(callback: CallbackQuery, session: AsyncSession):
+    """Підтвердження бронювання — показуємо реквізити для оплати переказом."""
     booking_id = int(callback.data.replace("confirm_booking_", ""))
 
-    result = await session.execute(
-        select(Booking).where(Booking.id == booking_id)
-    )
-    booking = result.scalar_one_or_none()
-
+    booking = await session.get(Booking, booking_id)
     if not booking:
         await callback.answer("Бронювання не знайдено", show_alert=True)
         return
 
     practice = await session.get(Practice, booking.practice_id)
     schedule = await session.get(PracticeSchedule, booking.schedule_id)
+    user = await session.get(User, booking.user_id)
+    if not (practice and schedule and user):
+        await callback.answer("Дані заявки неповні", show_alert=True)
+        return
 
+    # Створюємо запис платежу зі статусом PENDING (без MonoPay)
     payment = Payment(
         user_id=booking.user_id,
         booking_id=booking.id,
         amount=practice.price,
         currency="UAH",
         status=PaymentStatus.PENDING,
-        payment_provider="monopay",
+        payment_provider="manual_transfer",
     )
     session.add(payment)
     await session.commit()
     await session.refresh(payment)
 
     date_str = schedule.datetime.strftime("%d.%m.%Y %H:%M")
-    description = f"Практика '{practice.title}' - {date_str}"
+    purpose = format_purpose_for_booking(practice.title, date_str, user.full_name or "")
+    requisites_text = format_requisites(purpose)
 
-    invoice = await mono_service.create_invoice(
-        amount=practice.price,
-        description=description,
-        reference=f"payment_{payment.id}",
-        webhook_url="https://your-domain.com/webhook/monopay",
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="📸  Я сплатив(ла) — надіслати квитанцію",
+        callback_data=f"proof_booking_{booking.id}",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="❌  Скасувати заявку",
+        callback_data=f"cancel_booking_{booking.id}",
+    ))
+    kb.row(InlineKeyboardButton(text="◀️  До головного меню", callback_data="main_menu"))
+
+    await callback.message.edit_text(
+        text=requisites_text,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
     )
-
-    if invoice["success"]:
-        payment.transaction_id = invoice["invoice_id"]
-        payment.payment_url = invoice["payment_url"]
-        await session.commit()
-
-        text = f"""
-💳 <b>Перехід до оплати</b>
-
-🪷  <b>Практика:</b> {practice.title}
-📅  <b>Дата:</b> {date_str}
-💰  <b>До сплати:</b> {int(practice.price)} грн
-
-━━━━━━━━━━━━━━━━━
-Натисніть кнопку нижче, щоб сплатити через MonoPay.
-Після оплати натисніть «✅ Я сплатив(ла)» для перевірки статусу.
-"""
-
-        await callback.message.edit_text(
-            text=text,
-            reply_markup=get_payment_keyboard(payment.payment_url, payment.id),
-            parse_mode="HTML",
-        )
-    else:
-        text = f"""
-❌ <b>Помилка створення платежу</b>
-
-Виникла помилка під час створення платежу.
-Будь ласка, звʼяжіться з менеджером або спробуйте пізніше.
-
-Помилка: {invoice.get('error', 'Невідома помилка')}
-"""
-        await callback.message.edit_text(
-            text=text,
-            reply_markup=get_back_to_main_menu(),
-            parse_mode="HTML",
-        )
-
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("check_payment_"))
-async def check_payment(callback: CallbackQuery, session: AsyncSession, mono_service: MonoPayService, config):
-    """Перевірка статусу платежу"""
-    payment_id = int(callback.data.replace("check_payment_", ""))
-    payment = await session.get(Payment, payment_id)
+# ───────── Завантаження квитанції клієнтом ─────────
 
-    if not payment:
-        await callback.answer("Платіж не знайдено", show_alert=True)
+@router.callback_query(F.data.startswith("proof_booking_"))
+async def start_proof_upload_for_booking(callback: CallbackQuery, state: FSMContext):
+    """Очікуємо скріншот/PDF-квитанції для конкретного бронювання."""
+    booking_id = int(callback.data.replace("proof_booking_", ""))
+    await state.set_state(BookingStates.waiting_for_proof)
+    await state.update_data(booking_id=booking_id, kind="booking")
+
+    await callback.message.answer(
+        "📸 <b>Надішліть, будь ласка, квитанцію</b>\n\n"
+        "Підійде скріншот, фото або PDF-чек.\n"
+        "Можна додати кілька файлів — кожне фото окремим повідомленням.\n\n"
+        "Коли закінчите — натисніть /done\n"
+        "Або /cancel щоб відмінити.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "proof_generic")
+async def start_proof_upload_generic(callback: CallbackQuery, state: FSMContext):
+    """Завантаження квитанції без привʼязки до бронювання (з кнопки в меню)."""
+    await state.set_state(BookingStates.waiting_for_proof)
+    await state.update_data(kind="generic")
+
+    await callback.message.answer(
+        "📸 <b>Надішліть, будь ласка, квитанцію</b>\n\n"
+        "Підійде скріншот, фото або PDF-чек.\n"
+        "Якщо файлів декілька — кожен окремим повідомленням.\n\n"
+        "Коли закінчите — натисніть /done\n"
+        "Або /cancel щоб відмінити.",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(BookingStates.waiting_for_proof, F.text == "/cancel")
+async def proof_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Скасовано.", reply_markup=get_back_to_main_menu())
+
+
+@router.message(BookingStates.waiting_for_proof, F.text == "/done")
+async def proof_done(message: Message, state: FSMContext):
+    data = await state.get_data()
+    sent = data.get("sent_count", 0)
+    if sent == 0:
+        await message.answer("Ви ще нічого не надіслали. Прикріпіть квитанцію або /cancel.")
         return
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Дякуємо!</b>\n\n"
+        f"Ми отримали ваше підтвердження ({sent} файл(ів)).\n"
+        "Менеджер перевірить оплату та звʼяжеться з вами найближчим часом 🤍",
+        reply_markup=get_back_to_main_menu(),
+        parse_mode="HTML",
+    )
 
-    status_result = await mono_service.check_payment_status(payment.transaction_id)
 
-    if status_result["success"]:
-        if status_result["paid"]:
-            payment.status = PaymentStatus.SUCCESS
-            payment.paid_at = datetime.utcnow()
+@router.message(BookingStates.waiting_for_proof, F.photo | F.document)
+async def proof_collect(message: Message, state: FSMContext, session: AsyncSession, config):
+    """Користувач прислав фото/документ — пересилаємо адмінам."""
+    data = await state.get_data()
+    kind = data.get("kind")
+    sent_count = data.get("sent_count", 0) + 1
+    await state.update_data(sent_count=sent_count)
 
-            booking = await session.get(Booking, payment.booking_id)
-            booking.status = BookingStatus.CONFIRMED
+    user = message.from_user
+    handle = f"@{user.username}" if user.username else f"<a href='tg://user?id={user.id}'>відкрити чат</a>"
 
-            await session.commit()
+    if kind == "booking":
+        booking_id = data.get("booking_id")
+        booking = await session.get(Booking, booking_id) if booking_id else None
+        practice = await session.get(Practice, booking.practice_id) if booking else None
+        schedule = await session.get(PracticeSchedule, booking.schedule_id) if booking else None
+        date_str = schedule.datetime.strftime("%d.%m.%Y о %H:%M") if schedule else "—"
 
-            # Уведомлюємо адмінів про оплату
-            try:
-                await notify_payment_success(callback.bot, config.tg_bot.admin_ids, session, payment.id)
-            except Exception:
-                pass
-
-            practice = await session.get(Practice, booking.practice_id)
-            schedule = await session.get(PracticeSchedule, booking.schedule_id)
-            date_str = schedule.datetime.strftime("%d.%m.%Y о %H:%M")
-
-            text = f"""
-✅ <b>Оплата пройшла успішно!</b>
-
-Ваше бронювання підтверджено:
-
-🪷  <b>Практика:</b> {practice.title}
-📅  <b>Дата і час:</b> {date_str}
-📍  <b>Адреса:</b> Київ, вул. Рейтарська, 13
-
-━━━━━━━━━━━━━━━━━
-Чекаємо на вас! За 24 години до практики ми надішлемо нагадування.
-
-Якщо будуть питання — натисніть «💬 Звʼязатися з менеджером» 🤍
-"""
-
-            await callback.message.edit_text(
-                text=text,
-                reply_markup=get_back_to_main_menu(),
-                parse_mode="HTML",
-            )
-            await callback.answer("✅ Оплату підтверджено!", show_alert=True)
-        else:
-            await callback.answer(
-                "⏳ Платіж ще не оброблено. Зачекайте трохи та спробуйте знову.",
-                show_alert=True,
-            )
-    else:
-        await callback.answer(
-            "❌ Помилка перевірки платежу. Спробуйте пізніше або звʼяжіться з менеджером.",
-            show_alert=True,
+        caption = (
+            "💰 <b>КВИТАНЦІЯ ВІД КЛІЄНТА</b>\n"
+            "━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 <b>Заявка #{booking_id}</b>\n"
+            f"🪷  {practice.title if practice else '?'}\n"
+            f"📅  {date_str}\n"
+            f"💰  {int(practice.price) if practice else 0} грн\n\n"
+            f"👤  {user.full_name}  •  {handle}\n\n"
+            f"/booking_{booking_id} — відкрити заявку"
         )
+    else:
+        caption = (
+            "💰 <b>КВИТАНЦІЯ ВІД КЛІЄНТА</b>  (загальна)\n"
+            "━━━━━━━━━━━━━━━━━\n\n"
+            f"👤  {user.full_name}  •  {handle}\n"
+            "<i>Без привʼязки до бронювання</i>"
+        )
+
+    bot = message.bot
+    for admin_id in config.tg_bot.admin_ids:
+        try:
+            # Пересилаємо оригінальне повідомлення (зберігає якість)
+            forwarded = await bot.copy_message(
+                chat_id=admin_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
+            # І окремим повідомленням — підпис із метаданими
+            await bot.send_message(
+                chat_id=admin_id,
+                text=caption,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_to_message_id=forwarded.message_id,
+            )
+        except Exception:
+            pass
+
+    await message.answer(
+        f"✅ Отримано ({sent_count}). Якщо є ще файли — надішліть, інакше /done."
+    )
 
 
 @router.callback_query(F.data.startswith("cancel_booking_"))

@@ -14,7 +14,7 @@ from database.models import Base
 from services.monopay import MonoPayService
 
 # Импорт роутеров
-from handlers import menu, practices, individual, courses, admin
+from handlers import menu, practices, individual, courses, admin, locations
 
 # Настройка логирования
 logging.basicConfig(
@@ -108,6 +108,7 @@ async def main():
     # Регистрируем роутеры (admin — першим, щоб /admin перехоплювався фільтром)
     dp.include_router(admin.router)
     dp.include_router(menu.router)
+    dp.include_router(locations.router)
     dp.include_router(practices.router)
     dp.include_router(individual.router)
     dp.include_router(courses.router)

@@ -164,9 +164,21 @@ class CourseMaterial(Base):
 
 class ManagerContact(Base):
     __tablename__ = "manager_contacts"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     telegram_username: Mapped[str] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(20))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Location(Base):
+    __tablename__ = "locations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    address: Mapped[str] = mapped_column(String(500))
+    maps_url: Mapped[str] = mapped_column(String(1000))
+    video_file_id: Mapped[Optional[str]] = mapped_column(String(255))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
