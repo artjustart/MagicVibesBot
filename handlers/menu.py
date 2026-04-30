@@ -11,7 +11,7 @@ from database.models import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from content.texts import WELCOME_TEXT, HELP_TEXT, TOOLS_PLACEHOLDER
+from content.texts import WELCOME_TEXT, HELP_TEXT, TOOLS_PLACEHOLDER, TOOLS_INSTAGRAM_URL
 
 router = Router()
 
@@ -145,17 +145,30 @@ async def pay_by_requisites(callback: CallbackQuery):
 
 @router.callback_query(F.data == "tools")
 async def show_tools(callback: CallbackQuery):
-    """Розділ Інструменти для саунд-хілінгу — placeholder, поки замовник не пришле URL."""
+    """Розділ Інструменти для саунд-хілінгу — посилання на Instagram."""
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="📷  Відкрити Instagram",
+        url=TOOLS_INSTAGRAM_URL,
+    ))
+    kb.row(InlineKeyboardButton(
+        text="◀️  До головного меню",
+        callback_data="main_menu",
+    ))
+
     try:
         await callback.message.edit_text(
             text=TOOLS_PLACEHOLDER,
-            reply_markup=get_back_to_main_menu(),
+            reply_markup=kb.as_markup(),
             parse_mode="HTML",
         )
     except Exception:
         await callback.message.answer(
             text=TOOLS_PLACEHOLDER,
-            reply_markup=get_back_to_main_menu(),
+            reply_markup=kb.as_markup(),
             parse_mode="HTML",
         )
     await callback.answer()
